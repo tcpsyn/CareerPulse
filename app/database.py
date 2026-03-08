@@ -81,6 +81,7 @@ class Database:
                 ats_score INTEGER NOT NULL DEFAULT 0,
                 ats_issues TEXT NOT NULL DEFAULT '[]',
                 ats_tips TEXT NOT NULL DEFAULT '[]',
+                exclude_terms TEXT NOT NULL DEFAULT '[]',
                 updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS ai_settings (
@@ -111,6 +112,7 @@ class Database:
             "ats_score": "ALTER TABLE search_config ADD COLUMN ats_score INTEGER NOT NULL DEFAULT 0",
             "ats_issues": "ALTER TABLE search_config ADD COLUMN ats_issues TEXT NOT NULL DEFAULT '[]'",
             "ats_tips": "ALTER TABLE search_config ADD COLUMN ats_tips TEXT NOT NULL DEFAULT '[]'",
+            "exclude_terms": "ALTER TABLE search_config ADD COLUMN exclude_terms TEXT NOT NULL DEFAULT '[]'",
         }
         for col, sql in migrations.items():
             if col not in columns:
@@ -196,7 +198,8 @@ class Database:
 
     async def list_jobs(self, sort_by="score", limit=50, offset=0, min_score=None,
                         search=None, source=None, dismissed=False,
-                        work_type=None, employment_type=None, location=None):
+                        work_type=None, employment_type=None, location=None,
+                        exclude_terms=None):
         query = """
             SELECT j.*, js.match_score, js.match_reasons, js.concerns, a.status as app_status
             FROM jobs j
@@ -229,6 +232,10 @@ class Database:
         if location:
             query += " AND LOWER(j.location) LIKE ?"
             params.append(f"%{location.lower()}%")
+        if exclude_terms:
+            for term in exclude_terms:
+                query += " AND LOWER(j.title) NOT LIKE ? AND LOWER(j.description) NOT LIKE ?"
+                params.extend([f"%{term.lower()}%", f"%{term.lower()}%"])
         if sort_by == "score":
             query += " ORDER BY js.match_score DESC NULLS LAST"
         else:
@@ -271,6 +278,7 @@ class Database:
         d["key_skills"] = json.loads(d["key_skills"])
         d["ats_issues"] = json.loads(d["ats_issues"])
         d["ats_tips"] = json.loads(d["ats_tips"])
+        d["exclude_terms"] = json.loads(d.get("exclude_terms", "[]"))
         return d
 
     async def save_search_config(self, resume_text: str, search_terms: list[str],
@@ -297,6 +305,14 @@ class Database:
             (resume_text, json.dumps(search_terms), json.dumps(job_titles or []),
              json.dumps(key_skills or []), seniority, summary,
              ats_score, json.dumps(ats_issues or []), json.dumps(ats_tips or []), now)
+        )
+        await self.db.commit()
+
+    async def update_exclude_terms(self, exclude_terms: list[str]):
+        now = datetime.now(timezone.utc).isoformat()
+        await self.db.execute(
+            "UPDATE search_config SET exclude_terms = ?, updated_at = ? WHERE id = 1",
+            (json.dumps(exclude_terms), now)
         )
         await self.db.commit()
 
@@ -359,6 +375,7 @@ class Database:
             ("total_applied", "SELECT COUNT(*) FROM applications WHERE status = 'applied'"),
             ("total_interested", "SELECT COUNT(*) FROM applications WHERE status = 'interested'"),
             ("total_interviewing", "SELECT COUNT(*) FROM applications WHERE status = 'interviewing'"),
+            ("total_prepared", "SELECT COUNT(*) FROM applications WHERE status = 'prepared'"),
         ]:
             cursor = await self.db.execute(query)
             row = await cursor.fetchone()

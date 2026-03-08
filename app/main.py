@@ -158,11 +158,13 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
         employment_type: str | None = Query(None),
         location: str | None = Query(None),
     ):
+        config = await app.state.db.get_search_config()
+        exclude_terms = config.get("exclude_terms", []) if config else []
         jobs = await app.state.db.list_jobs(
             sort_by=sort, limit=limit, offset=offset,
             min_score=min_score, search=search, source=source,
             work_type=work_type, employment_type=employment_type,
-            location=location,
+            location=location, exclude_terms=exclude_terms,
         )
         return {"jobs": jobs}
 
@@ -355,7 +357,7 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
             return {"resume_text": "", "search_terms": [], "job_titles": [],
                     "key_skills": [], "seniority": "", "summary": "",
                     "ats_score": 0, "ats_issues": [], "ats_tips": [],
-                    "updated_at": None}
+                    "exclude_terms": [], "updated_at": None}
         return config
 
     @app.post("/api/search-config/terms")
@@ -366,6 +368,15 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
             raise HTTPException(400, "search_terms must be a list")
         await app.state.db.update_search_terms(terms)
         return {"ok": True, "search_terms": terms}
+
+    @app.post("/api/search-config/exclude-terms")
+    async def update_exclude_terms(request: Request):
+        body = await request.json()
+        terms = body.get("exclude_terms", [])
+        if not isinstance(terms, list):
+            raise HTTPException(400, "exclude_terms must be a list")
+        await app.state.db.update_exclude_terms(terms)
+        return {"ok": True, "exclude_terms": terms}
 
     @app.get("/api/ai-settings")
     async def get_ai_settings():

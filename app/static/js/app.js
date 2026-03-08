@@ -636,7 +636,7 @@ async function renderStats(container) {
                         <div class="stage-label">Interested</div>
                     </div>
                     <div class="card pipeline-stage">
-                        <div class="stage-count">${(stats.total_scored || 0) - (stats.total_applied || 0) - (stats.total_interviewing || 0)}</div>
+                        <div class="stage-count">${stats.total_prepared || 0}</div>
                         <div class="stage-label">Prepared</div>
                     </div>
                     <div class="card pipeline-stage">
@@ -701,6 +701,7 @@ async function renderSettings(container) {
 
 function renderSettingsContent(container, config, aiSettings = {}) {
     const termsValue = (config.search_terms || []).join('\n');
+    const excludeTermsValue = (config.exclude_terms || []).join('\n');
     const hasResume = config.resume_text && config.resume_text.length > 0;
     const jobTitles = config.job_titles || [];
     const keySkills = config.key_skills || [];
@@ -845,6 +846,17 @@ function renderSettingsContent(container, config, aiSettings = {}) {
             </div>
         </div>
 
+        <div class="card" style="padding:24px;margin-bottom:24px">
+            <h2 style="font-size:1.125rem;font-weight:600;margin-bottom:16px">Exclude Terms</h2>
+            <p style="color:var(--text-secondary);margin-bottom:16px;font-size:0.875rem">
+                Jobs matching any of these terms (in title or description) will be hidden from results. One per line.
+            </p>
+            <textarea class="textarea-styled" id="exclude-terms-textarea" rows="6" placeholder="e.g. manager&#10;director&#10;management&#10;VP&#10;vice president">${escapeHtml(excludeTermsValue)}</textarea>
+            <div style="display:flex;gap:12px;margin-top:12px">
+                <button class="btn btn-primary" id="save-exclude-btn">Save Exclude Terms</button>
+            </div>
+        </div>
+
         ${config.updated_at ? `<p style="color:var(--text-tertiary);font-size:0.8125rem;margin-bottom:24px">Last updated: ${formatDate(config.updated_at)}</p>` : ''}
 
         <div class="card" style="padding:24px;margin-bottom:24px;border-left:4px solid var(--danger, #ef4444)">
@@ -899,6 +911,17 @@ function renderSettingsContent(container, config, aiSettings = {}) {
         try {
             await api.updateSearchTerms(terms);
             showToast(`Saved ${terms.length} search terms`, 'success');
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
+    });
+
+    document.getElementById('save-exclude-btn').addEventListener('click', async () => {
+        const text = document.getElementById('exclude-terms-textarea').value;
+        const terms = text.split('\n').map(t => t.trim()).filter(t => t.length > 0);
+        try {
+            await api.request('POST', '/api/search-config/exclude-terms', { exclude_terms: terms });
+            showToast(`Saved ${terms.length} exclude term${terms.length !== 1 ? 's' : ''}`, 'success');
         } catch (err) {
             showToast(err.message, 'error');
         }
