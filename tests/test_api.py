@@ -282,6 +282,26 @@ async def test_profile_crud(client):
 
 
 @pytest.mark.asyncio
+async def test_export_csv(client, app):
+    from app.database import make_dedup_hash
+    db = app.state.db
+    dedup = make_dedup_hash("Dev", "Co", "http://x")
+    await db.db.execute(
+        """INSERT INTO jobs (title, company, location, url, dedup_hash, created_at)
+           VALUES (?, ?, ?, ?, ?, ?)""",
+        ("Dev", "Co", "Remote", "http://x", dedup, "2026-01-01")
+    )
+    await db.db.commit()
+
+    resp = await client.get("/api/export/csv")
+    assert resp.status_code == 200
+    assert "text/csv" in resp.headers["content-type"]
+    content = resp.text
+    assert "Title" in content
+    assert "Dev" in content
+
+
+@pytest.mark.asyncio
 async def test_upload_resume_no_client(client, app):
     app.state._anthropic_client = None
     app.state.testing = True

@@ -327,6 +327,50 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
     async def get_stats():
         return await app.state.db.get_stats()
 
+    @app.get("/api/export/csv")
+    async def export_csv(
+        min_score: int | None = Query(None),
+        status: str | None = Query(None),
+    ):
+        import csv
+        import io
+
+        jobs = await app.state.db.list_jobs(sort_by="score", limit=10000)
+
+        output = io.StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "Title", "Company", "Location", "Score", "Status",
+            "Salary Min", "Salary Max", "URL", "Posted Date",
+            "Contact Email", "Applied At", "Source"
+        ])
+
+        for job in jobs:
+            app_row = job.get("app_status", "")
+            if status and app_row != status:
+                continue
+            score = job.get("match_score") or 0
+            if min_score and score < min_score:
+                continue
+            sources = await app.state.db.get_sources(job["id"])
+            source_names = ", ".join(s["source_name"] for s in sources)
+            application = await app.state.db.get_application(job["id"])
+            writer.writerow([
+                job["title"], job["company"], job.get("location", ""),
+                job.get("match_score", ""), app_row,
+                job.get("salary_min", ""), job.get("salary_max", ""),
+                job["url"], job.get("posted_date", ""),
+                job.get("contact_email", ""),
+                application.get("applied_at", "") if application else "",
+                source_names,
+            ])
+
+        return Response(
+            content=output.getvalue(),
+            media_type="text/csv",
+            headers={"Content-Disposition": 'attachment; filename="careerpulse-export.csv"'},
+        )
+
     @app.post("/api/clear-jobs")
     async def clear_jobs():
         await app.state.db.clear_jobs()

@@ -721,6 +721,7 @@ async function renderStats(container) {
                 <div style="display:flex;gap:8px">
                     <button class="btn btn-primary" id="stats-scrape-btn">Scrape Now</button>
                     <button class="btn btn-secondary" id="stats-score-btn">${stats.total_jobs - stats.total_scored > 0 ? `Score ${stats.total_jobs - stats.total_scored} Unscored` : 'All Scored'}</button>
+                    <button class="btn btn-secondary" id="stats-export-btn">Export CSV</button>
                 </div>
             </div>
             <div class="stats-grid">
@@ -775,6 +776,9 @@ async function renderStats(container) {
             } catch (err) {
                 showToast(err.message, 'error');
             }
+        });
+        document.getElementById('stats-export-btn').addEventListener('click', () => {
+            window.location.href = '/api/export/csv';
         });
     } catch (err) {
         showToast(err.message, 'error');
