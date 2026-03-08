@@ -1,4 +1,4 @@
-# JobFinder
+# CareerPulse
 
 Self-hosted job discovery and application tool. Scrapes jobs from multiple boards, scores them against your resume using AI, and helps prepare tailored applications.
 
@@ -8,8 +8,9 @@ Self-hosted job discovery and application tool. Scrapes jobs from multiple board
 - **AI-powered matching** — Scores jobs 0-100 against your resume with reasons and concerns
 - **Resume analysis** — Extracts skills, suggests job titles, rates ATS compatibility
 - **Application prep** — Generates tailored resumes and cover letters per job
+- **ATS-optimized PDFs** — Drag-and-drop resume and cover letter downloads
 - **Configurable AI backend** — Anthropic (Claude) or Ollama (local models)
-- **Job filters** — Score threshold, work type (remote/onsite/hybrid), employment type, location, keyword search
+- **Job filters** — Score threshold, work type, employment type, location, keyword search, exclude terms
 - **Automated scheduling** — Periodic scraping with APScheduler
 - **Persistent data** — SQLite database survives restarts via Docker volume mount
 - **Data management** — Clear jobs or reset all data from Settings
@@ -114,6 +115,7 @@ SQLite with tables: `jobs`, `sources`, `job_scores`, `applications`, `search_con
 ### Configuration
 - `GET /api/search-config` — Resume analysis and search terms
 - `POST /api/search-config/terms` — Update search terms
+- `POST /api/search-config/exclude-terms` — Update exclude terms
 - `POST /api/resume/upload` — Upload + analyze resume (multipart)
 
 ### AI Settings

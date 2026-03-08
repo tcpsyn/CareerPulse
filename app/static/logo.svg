@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 40" fill="none">
+  <defs>
+    <linearGradient id="lg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#3b82f6"/>
+      <stop offset="100%" stop-color="#8b5cf6"/>
+    </linearGradient>
+  </defs>
+  <!-- Icon -->
+  <rect x="2" y="4" width="32" height="32" rx="7" fill="url(#lg)"/>
+  <path d="M18 11c-4.97 0-9 3.13-9 7 0 2.38 1.64 4.47 4.1 5.74L12 29l4-2.5c.65.1 1.32.15 2 .15 4.97 0 9-3.13 9-7s-4.03-7-9-7z" fill="none" stroke="#fff" stroke-width="1.8" stroke-linejoin="round"/>
+  <path d="M14 16.5h8M14 19.5h5" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/>
+  <circle cx="24" cy="15" r="3.5" fill="#22c55e" stroke="url(#lg)" stroke-width="1"/>
+  <path d="M22.8 15l.9.9 1.8-1.8" stroke="#fff" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+  <!-- Text -->
+  <text x="42" y="27" font-family="Inter, system-ui, -apple-system, sans-serif" font-size="20" font-weight="700" letter-spacing="-0.5">
+    <tspan fill="currentColor">Career</tspan><tspan fill="url(#lg)">Pulse</tspan>
+  </text>
+</svg>

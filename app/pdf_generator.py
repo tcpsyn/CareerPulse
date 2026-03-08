@@ -32,8 +32,8 @@ def _set_metadata(doc, title: str, author: str = ""):
         "title": title,
         "author": author,
         "subject": title,
-        "creator": "JobFinder",
-        "producer": "JobFinder",
+        "creator": "CareerPulse",
+        "producer": "CareerPulse",
     })
 
 

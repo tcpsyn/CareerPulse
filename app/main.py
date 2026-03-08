@@ -108,7 +108,7 @@ async def lifespan(app: FastAPI):
 
 
 def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> FastAPI:
-    app = FastAPI(title="JobFinder", lifespan=lifespan)
+    app = FastAPI(title="CareerPulse", lifespan=lifespan)
     app.state.db_path = db_path
     app.state.testing = testing
 

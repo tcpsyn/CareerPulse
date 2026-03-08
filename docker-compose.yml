@@ -1,5 +1,5 @@
 services:
-  jobfinder:
+  careerpulse:
     build: .
     ports:
       - "8085:8085"

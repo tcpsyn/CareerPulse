@@ -114,6 +114,13 @@ a:hover {
     transition: background var(--transition), border-color var(--transition);
 }
 
+.nav-brand a {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    text-decoration: none;
+}
+
 .nav-brand h1 {
     font-size: 1.125rem;
     font-weight: 700;
