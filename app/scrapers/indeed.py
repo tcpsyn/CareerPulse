@@ -32,7 +32,7 @@ class IndeedScraper(BaseScraper):
                     logger.error(f"Indeed scrape failed for '{keyword}': {e}")
                     continue
 
-                feed = feedparser.parse(resp.text)
+                feed = feedparser.parse(resp.content)
                 for entry in feed.entries:
                     jobs.append(
                         JobListing(

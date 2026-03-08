@@ -26,7 +26,7 @@ class WeWorkRemotelyScraper(BaseScraper):
                     logger.error(f"WWR scrape failed for {feed_url}: {e}")
                     continue
 
-                feed = feedparser.parse(resp.text)
+                feed = feedparser.parse(resp.content)
                 for entry in feed.entries:
                     title = entry.get("title", "")
                     # WWR titles often have "Company: Title" format

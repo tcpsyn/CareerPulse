@@ -4,7 +4,7 @@ Self-hosted job discovery and application tool. Scrapes jobs from multiple board
 
 ## Features
 
-- **Multi-source scraping** — Indeed, LinkedIn, Dice, Remote OK, We Work Remotely, Remotive, Hacker News, USA Jobs
+- **Multi-source scraping** — Indeed, LinkedIn, Dice, We Work Remotely, Remotive, Hacker News, USA Jobs
 - **AI-powered matching** — Scores jobs 0-100 against your resume with reasons and concerns
 - **Resume analysis** — Extracts skills, suggests job titles, rates ATS compatibility
 - **Application prep** — Generates tailored resumes and cover letters per job
@@ -84,7 +84,7 @@ Recommended Ollama models for this app: `qwen2.5:32b`, `Qwen2.5-Coder:32b`, or `
 
 ```
 FastAPI (async)
-├── Scrapers (8 sources) → SQLite (aiosqlite)
+├── Scrapers (7 sources) → SQLite (aiosqlite)
 ├── AIClient (Anthropic | Ollama)
 │   ├── JobMatcher (scoring)
 │   ├── ResumeAnalyzer (analysis + ATS)
@@ -100,7 +100,6 @@ FastAPI (async)
 | Indeed | RSS feed | Keyword-based search |
 | LinkedIn | Google search | Rate-limited (30-90s delay) |
 | Dice | Google search | Rate-limited (30-90s delay) |
-| Remote OK | JSON API | Direct API |
 | We Work Remotely | RSS feed | Fixed categories (devops, backend) |
 | Remotive | REST API | Category-based filtering |
 | Hacker News | Algolia + HTML | "Who is Hiring" threads |
@@ -162,7 +161,7 @@ pip install -e ".[dev]"
 pytest
 ```
 
-115 tests covering scrapers, database, API endpoints, matcher, tailor, resume analyzer, AI client, contact finder, apply link finder, salary estimator, company research, and digest.
+112 tests covering scrapers, database, API endpoints, matcher, tailor, resume analyzer, AI client, contact finder, apply link finder, salary estimator, company research, and digest.
 
 ## Tech Stack
 

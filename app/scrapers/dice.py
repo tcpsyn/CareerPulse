@@ -31,12 +31,12 @@ class DiceScraper(BaseScraper):
             async with self.get_client() as client:
                 resp = await client.get(url)
                 resp.raise_for_status()
-                html = resp.text
+                html_bytes = resp.content
         except Exception as e:
             logger.error(f"Dice/Google scrape failed: {e}")
             return []
 
-        soup = BeautifulSoup(html, "html.parser")
+        soup = BeautifulSoup(html_bytes, "html.parser")
         jobs = []
 
         for result in soup.select("div.g"):

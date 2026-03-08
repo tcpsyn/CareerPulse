@@ -4,6 +4,16 @@ from typing import Optional
 import httpx
 
 
+def fix_mojibake(text: str) -> str:
+    """Fix common UTF-8 text that was decoded as Latin-1/CP1252."""
+    if not text:
+        return text
+    try:
+        return text.encode("cp1252").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+
+
 @dataclass
 class JobListing:
     title: str
@@ -18,6 +28,12 @@ class JobListing:
     application_method: str = "url"
     contact_email: Optional[str] = None
     tags: list[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        self.title = fix_mojibake(self.title)
+        self.description = fix_mojibake(self.description)
+        self.company = fix_mojibake(self.company)
+        self.location = fix_mojibake(self.location)
 
 
 class BaseScraper:
