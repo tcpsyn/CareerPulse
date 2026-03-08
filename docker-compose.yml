@@ -1,0 +1,10 @@
+services:
+  jobfinder:
+    build: .
+    ports:
+      - "8085:8085"
+    volumes:
+      - ./data:/app/data
+    env_file:
+      - .env
+    restart: unless-stopped
