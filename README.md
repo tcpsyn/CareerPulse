@@ -21,7 +21,7 @@ Self-hosted job discovery and application tool. Scrapes jobs from multiple board
 - **Daily digest** — Summary of new high-scoring matches with copy-to-clipboard
 - **CSV export** — Export your entire job pipeline to a spreadsheet
 - **Keyboard shortcuts** — Power-user navigation (j/k, ?, /, d, p, o, s)
-- **Configurable AI backend** — Anthropic (Claude) or Ollama (local models)
+- **Configurable AI backend** — Anthropic, OpenAI, Google Gemini, OpenRouter, or Ollama (local)
 - **Job filters** — Score threshold, work type, employment type, location, keyword search, exclude terms
 - **Automated scheduling** — Periodic scraping with APScheduler
 - **Persistent data** — SQLite database survives restarts via Docker volume mount
@@ -67,10 +67,13 @@ All env vars use the `JOBFINDER_` prefix. Everything can also be configured from
 
 Configure from **Settings > AI Provider**:
 
-- **Anthropic** — Enter API key, model defaults to `claude-sonnet-4-20250514`
+- **Anthropic** — API key required, defaults to `claude-sonnet-4-20250514`
+- **OpenAI** — API key required, defaults to `gpt-4o`
+- **Google (Gemini)** — API key required, defaults to `gemini-2.0-flash`
+- **OpenRouter** — API key required, defaults to `anthropic/claude-sonnet-4` (access many models through one API)
 - **Ollama** — Select from a dropdown of locally available models. Set the Ollama URL (defaults to `http://localhost:11434`). When running in Docker, localhost URLs are automatically rewritten to reach the host.
 
-Recommended Ollama models for this app: `qwen2.5:32b`, `Qwen2.5-Coder:32b`, or `qwen2.5:14b-instruct-q4_K_M`.
+OpenAI, Google, and OpenRouter use the OpenAI-compatible API format. Recommended Ollama models: `qwen2.5:32b`, `Qwen2.5-Coder:32b`, or `qwen2.5:14b-instruct-q4_K_M`.
 
 ## Usage
 
@@ -85,7 +88,7 @@ Recommended Ollama models for this app: `qwen2.5:32b`, `Qwen2.5-Coder:32b`, or `
 ```
 FastAPI (async)
 ├── Scrapers (7 sources) → SQLite (aiosqlite)
-├── AIClient (Anthropic | Ollama)
+├── AIClient (Anthropic | OpenAI | Google | OpenRouter | Ollama)
 │   ├── JobMatcher (scoring)
 │   ├── ResumeAnalyzer (analysis + ATS)
 │   └── Tailor (resume + cover letter)
@@ -161,13 +164,13 @@ pip install -e ".[dev]"
 pytest
 ```
 
-112 tests covering scrapers, database, API endpoints, matcher, tailor, resume analyzer, AI client, contact finder, apply link finder, salary estimator, company research, and digest.
+115 tests covering scrapers, database, API endpoints, matcher, tailor, resume analyzer, AI client, contact finder, apply link finder, salary estimator, company research, and digest.
 
 ## Tech Stack
 
 - **Backend**: Python 3.12+, FastAPI, aiosqlite, httpx
 - **Frontend**: Vanilla JS SPA, no build step
-- **AI**: Anthropic SDK / Ollama REST API
+- **AI**: Anthropic SDK / OpenAI SDK / Ollama REST API
 - **Scraping**: feedparser, BeautifulSoup4, httpx
 - **Scheduling**: APScheduler
 - **PDF**: PyMuPDF
