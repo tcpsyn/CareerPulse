@@ -68,6 +68,10 @@ async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str]
     if enriched_count:
         logger.info(f"Enriched {enriched_count}/{len(jobs_to_enrich)} job descriptions")
 
+    dismissed = await db.auto_dismiss_stale()
+    if dismissed:
+        logger.info(f"Auto-dismissed {dismissed} stale jobs")
+
     if progress is not None:
         progress.update({"completed": total_scrapers, "total": total_scrapers, "current": None, "new_jobs": total_new, "active": False})
     logger.info(f"Scrape cycle complete. {total_new} new jobs added.")
