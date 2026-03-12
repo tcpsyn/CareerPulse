@@ -1,17 +1,22 @@
+import html as _html
 from dataclasses import dataclass, field
 from typing import Optional
 
 import httpx
 
 
-def fix_mojibake(text: str) -> str:
-    """Fix common UTF-8 text that was decoded as Latin-1/CP1252."""
+def clean_text(text: str) -> str:
+    """Decode HTML entities and fix mojibake in scraped text."""
     if not text:
         return text
+    # Decode HTML entities (may be double-encoded, so run twice)
+    text = _html.unescape(_html.unescape(text))
+    # Fix UTF-8 text decoded as Latin-1/CP1252
     try:
-        return text.encode("cp1252").decode("utf-8")
+        text = text.encode("cp1252").decode("utf-8")
     except (UnicodeEncodeError, UnicodeDecodeError):
-        return text
+        pass
+    return text
 
 
 @dataclass
@@ -30,10 +35,10 @@ class JobListing:
     tags: list[str] = field(default_factory=list)
 
     def __post_init__(self):
-        self.title = fix_mojibake(self.title)
-        self.description = fix_mojibake(self.description)
-        self.company = fix_mojibake(self.company)
-        self.location = fix_mojibake(self.location)
+        self.title = clean_text(self.title)
+        self.description = clean_text(self.description)
+        self.company = clean_text(self.company)
+        self.location = clean_text(self.location)
 
 
 class BaseScraper:

@@ -15,6 +15,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
+      "exclude_matches": ["http://localhost:8001/*", "http://127.0.0.1:8001/*"],
       "js": ["content.js"],
       "css": ["styles.css"],
       "run_at": "document_idle",

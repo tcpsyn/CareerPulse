@@ -344,6 +344,28 @@ class Database:
                     (job_id, notes, now)
                 )
 
+        # Clean HTML entities from existing job titles/companies
+        await self._clean_html_entities()
+
+    async def _clean_html_entities(self):
+        """Fix double-encoded HTML entities in existing job data."""
+        import html as _html
+        cursor = await self.db.execute(
+            "SELECT id, title, company FROM jobs WHERE title LIKE '%&%' OR company LIKE '%&%'"
+        )
+        rows = await cursor.fetchall()
+        for row in rows:
+            job_id, title, company = row[0], row[1], row[2]
+            clean_title = _html.unescape(_html.unescape(title))
+            clean_company = _html.unescape(_html.unescape(company))
+            if clean_title != title or clean_company != company:
+                await self.db.execute(
+                    "UPDATE jobs SET title = ?, company = ? WHERE id = ?",
+                    (clean_title, clean_company, job_id)
+                )
+        if rows:
+            await self.db.commit()
+
     async def insert_job(self, title, company, location, salary_min, salary_max,
                          description, url, posted_date, application_method, contact_email):
         dedup = make_dedup_hash(title, company, url)

@@ -4,6 +4,93 @@ from app.ai_client import AIClient, parse_json_response
 
 logger = logging.getLogger(__name__)
 
+
+PROFILE_PARSE_PROMPT = """Extract structured profile data from this resume. Pull out every fact you can find.
+
+RESUME:
+{resume}
+
+Return ONLY valid JSON with this exact structure (use null for fields not found):
+{{
+    "personal": {{
+        "first_name": "...",
+        "last_name": "...",
+        "email": "...",
+        "phone": "...",
+        "address_city": "...",
+        "address_state": "...",
+        "address_country_name": "...",
+        "linkedin_url": "...",
+        "github_url": "...",
+        "portfolio_url": "...",
+        "website_url": "..."
+    }},
+    "work_history": [
+        {{
+            "job_title": "...",
+            "company": "...",
+            "location_city": "...",
+            "location_state": "...",
+            "start_month": 1,
+            "start_year": 2020,
+            "end_month": null,
+            "end_year": null,
+            "is_current": 1,
+            "description": "Brief summary of role and key achievements"
+        }}
+    ],
+    "education": [
+        {{
+            "school": "...",
+            "degree_type": "bachelors",
+            "field_of_study": "...",
+            "grad_year": 2018,
+            "gpa": null
+        }}
+    ],
+    "skills": [
+        {{
+            "name": "...",
+            "years_experience": null,
+            "proficiency": "advanced"
+        }}
+    ],
+    "certifications": [
+        {{
+            "name": "...",
+            "issuing_org": "...",
+            "date_obtained": "2023-01-01"
+        }}
+    ],
+    "languages": [
+        {{
+            "language": "English",
+            "proficiency": "native"
+        }}
+    ]
+}}
+
+Rules:
+- Extract ALL work history entries, ordered most recent first
+- For skills, extract technical skills, tools, frameworks, and languages mentioned
+- proficiency for skills: beginner/intermediate/advanced/expert (infer from context)
+- degree_type must be one of: high_school, associates, bachelors, masters, mba, jd, md, phd, other
+- language proficiency: native/fluent/conversational/basic
+- For work history descriptions, summarize key responsibilities and achievements in 1-3 sentences
+- Use null (not empty string) for fields not found in the resume
+- Do NOT fabricate data — only extract what is explicitly stated"""
+
+
+async def parse_resume_to_profile(client: AIClient, resume_text: str) -> dict:
+    try:
+        prompt = PROFILE_PARSE_PROMPT.format(resume=resume_text)
+        raw = await client.chat(prompt, max_tokens=4000)
+        result = parse_json_response(raw)
+        return result
+    except Exception as e:
+        logger.error(f"Resume profile parse failed: {e}")
+        return {}
+
 ANALYSIS_PROMPT = """Analyze this resume and determine what jobs this person is best suited for.
 
 RESUME:

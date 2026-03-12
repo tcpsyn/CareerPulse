@@ -158,6 +158,51 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
             app.state.matcher = None
             app.state.tailor = None
 
+    async def _save_parsed_profile(db, profile_data: dict):
+        """Save AI-parsed resume data into profile tables, merging with existing."""
+        try:
+            personal = profile_data.get("personal", {})
+            if personal:
+                clean = {k: v for k, v in personal.items() if v is not None}
+                if clean:
+                    existing = await db.get_user_profile() or {}
+                    # Only fill in empty fields, don't overwrite user edits
+                    merged = {}
+                    for k, v in clean.items():
+                        existing_val = existing.get(k)
+                        if not existing_val or existing_val == "":
+                            merged[k] = v
+                    if "first_name" in clean and "last_name" in clean:
+                        if not existing.get("full_name"):
+                            merged["full_name"] = f"{clean['first_name']} {clean['last_name']}"
+                    if merged:
+                        await db.save_user_profile(**merged)
+
+            # For list tables, only add if table is currently empty
+            for key, endpoint in [
+                ("work_history", "save_work_history"),
+                ("education", "save_education"),
+                ("certifications", "save_certification"),
+                ("skills", "save_skill"),
+                ("languages", "save_language"),
+            ]:
+                items = profile_data.get(key, [])
+                if not items:
+                    continue
+                full = await db.get_full_profile()
+                existing_items = full.get(key, [])
+                if existing_items:
+                    continue  # Don't overwrite existing data
+                save_fn = getattr(db, endpoint)
+                for item in items:
+                    clean_item = {k: v for k, v in item.items() if v is not None}
+                    if clean_item:
+                        await save_fn(clean_item)
+
+            logger.info("Parsed profile data saved from resume")
+        except Exception as e:
+            logger.error(f"Failed to save parsed profile: {e}")
+
     @app.get("/api/health")
     async def health():
         return {"status": "ok"}
@@ -891,11 +936,15 @@ Rules:
 
         analysis = {"search_terms": [], "job_titles": [], "key_skills": [],
                     "seniority": "", "summary": "", "ats_score": 0, "ats_issues": [], "ats_tips": []}
+        profile_data = {}
         logger.info(f"Resume upload: {len(resume_text)} chars, client={'yes' if client else 'no'}")
         if client:
-            from app.resume_analyzer import analyze_resume
-            analysis = await analyze_resume(client, resume_text)
+            from app.resume_analyzer import analyze_resume, parse_resume_to_profile
+            analysis_task = analyze_resume(client, resume_text)
+            profile_task = parse_resume_to_profile(client, resume_text)
+            analysis, profile_data = await asyncio.gather(analysis_task, profile_task)
             logger.info(f"Analysis result: ats_score={analysis.get('ats_score')}, terms={len(analysis.get('search_terms', []))}")
+            logger.info(f"Profile parse: {len(profile_data)} sections extracted")
 
             _reinit_ai_services(client, resume_text)
 
@@ -911,6 +960,9 @@ Rules:
             ats_tips=analysis.get("ats_tips", []),
         )
 
+        if profile_data:
+            await _save_parsed_profile(app.state.db, profile_data)
+
         return {
             "ok": True,
             "search_terms": analysis["search_terms"],
@@ -922,6 +974,7 @@ Rules:
             "ats_issues": analysis.get("ats_issues", []),
             "ats_tips": analysis.get("ats_tips", []),
             "resume_length": len(resume_text),
+            "profile_parsed": bool(profile_data),
         }
 
     @app.get("/api/companies/{company_name:path}")
