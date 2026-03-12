@@ -448,6 +448,62 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
         await db.add_event(job_id, "applied", "Applied via CareerPulse")
         return {"url": apply_url, "status": "applied"}
 
+    @app.post("/api/jobs/{job_id}/generate-cover-letter")
+    async def generate_cover_letter_endpoint(job_id: int):
+        db = app.state.db
+        client = app.state.ai_client
+        if not client:
+            raise HTTPException(503, "AI client not configured")
+
+        job = await db.get_job(job_id)
+        if not job:
+            raise HTTPException(404, "Job not found")
+
+        config = await db.get_search_config()
+        resume_text = config["resume_text"] if config else ""
+        profile = await db.get_user_profile() or {}
+        score = await db.get_score(job_id)
+        match_reasons = score["match_reasons"] if score else []
+
+        from app.cover_letter import generate_cover_letter
+        result = await generate_cover_letter(
+            client=client,
+            job_title=job["title"],
+            company=job["company"],
+            job_description=job.get("description") or "",
+            resume_text=resume_text,
+            profile=profile,
+            match_reasons=match_reasons,
+        )
+
+        app_record = await db.get_application(job_id)
+        if app_record:
+            await db.update_application(app_record["id"], cover_letter=result["cover_letter"])
+        else:
+            app_id = await db.insert_application(job_id, status="interested")
+            await db.update_application(app_id, cover_letter=result["cover_letter"])
+
+        return result
+
+    @app.put("/api/jobs/{job_id}/cover-letter")
+    async def save_cover_letter(job_id: int, request: Request):
+        db = app.state.db
+        job = await db.get_job(job_id)
+        if not job:
+            raise HTTPException(404, "Job not found")
+
+        body = await request.json()
+        cover_letter = body.get("cover_letter", "")
+
+        app_record = await db.get_application(job_id)
+        if app_record:
+            await db.update_application(app_record["id"], cover_letter=cover_letter)
+        else:
+            app_id = await db.insert_application(job_id, status="interested")
+            await db.update_application(app_id, cover_letter=cover_letter)
+
+        return {"ok": True}
+
     @app.post("/api/jobs/{job_id}/application")
     async def update_application(job_id: int, status: str = Query(...), notes: str = Query("")):
         app_row = await app.state.db.get_application(job_id)

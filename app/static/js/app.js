@@ -51,6 +51,10 @@ const api = {
         return this.request('POST', `/api/jobs/${id}/email`);
     },
 
+    generateCoverLetter(id) {
+        return this.request('POST', `/api/jobs/${id}/generate-cover-letter`);
+    },
+
     addEvent(id, detail) {
         return this.request('POST', `/api/jobs/${id}/events`, { detail });
     },
@@ -766,6 +770,14 @@ function renderJobDetailContent(container, job, profile = {}, companyInfo = null
                 <div id="prepared-container">
                     ${application?.tailored_resume ? renderPreparedSection(application, job.id) : ''}
                 </div>
+                <div id="cover-letter-container">
+                    ${application?.cover_letter ? renderCoverLetterSection(application.cover_letter, job.id) : `
+                    <div class="card sidebar-section">
+                        <h3>Cover Letter</h3>
+                        <button class="btn btn-secondary" id="generate-cover-letter-btn" style="width:100%">Generate Cover Letter</button>
+                    </div>
+                    `}
+                </div>
                 <div id="email-container">
                     ${application?.email_draft ? renderEmailPreview(JSON.parse(application.email_draft)) : ''}
                 </div>
@@ -944,6 +956,26 @@ function renderJobDetailContent(container, job, profile = {}, companyInfo = null
         });
     }
 
+    const genCoverLetterBtn = document.getElementById('generate-cover-letter-btn');
+    if (genCoverLetterBtn) {
+        genCoverLetterBtn.addEventListener('click', async () => {
+            genCoverLetterBtn.disabled = true;
+            genCoverLetterBtn.innerHTML = '<span class="spinner"></span> Generating...';
+            try {
+                const result = await api.generateCoverLetter(job.id);
+                document.getElementById('cover-letter-container').innerHTML = renderCoverLetterSection(result.cover_letter, job.id);
+                attachCoverLetterListeners(job.id);
+                showToast('Cover letter generated!', 'success');
+            } catch (err) {
+                showToast(err.message, 'error');
+                genCoverLetterBtn.disabled = false;
+                genCoverLetterBtn.textContent = 'Generate Cover Letter';
+            }
+        });
+    }
+
+    attachCoverLetterListeners(job.id);
+
     document.querySelectorAll('.copy-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             copyToClipboard(btn.dataset.copy);
@@ -1056,6 +1088,68 @@ function attachPreparedListeners() {
     if (copyCover) {
         copyCover.addEventListener('click', () => {
             copyToClipboard(document.getElementById('cover-textarea').value);
+        });
+    }
+}
+
+function renderCoverLetterSection(coverLetterText, jobId) {
+    if (!coverLetterText) return '';
+    return `
+        <div class="card sidebar-section">
+            <h3>Cover Letter</h3>
+            <div class="prepared-section">
+                <textarea class="textarea-styled" id="standalone-cover-textarea" rows="12">${escapeHtml(coverLetterText)}</textarea>
+                <div class="prepared-actions" style="display:flex;gap:8px;margin-top:8px">
+                    <button class="btn btn-primary btn-sm" id="save-cover-letter-btn">Save Edits</button>
+                    <button class="btn btn-secondary btn-sm" id="copy-cover-letter-btn">Copy</button>
+                    <button class="btn btn-secondary btn-sm" id="regenerate-cover-letter-btn">Regenerate</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function attachCoverLetterListeners(jobId) {
+    const saveBtn = document.getElementById('save-cover-letter-btn');
+    if (saveBtn) {
+        saveBtn.addEventListener('click', async () => {
+            const text = document.getElementById('standalone-cover-textarea').value;
+            saveBtn.disabled = true;
+            saveBtn.innerHTML = '<span class="spinner"></span>';
+            try {
+                await api.request('PUT', `/api/jobs/${jobId}/cover-letter`, { cover_letter: text });
+                showToast('Cover letter saved', 'success');
+            } catch (err) {
+                showToast(err.message, 'error');
+            } finally {
+                saveBtn.disabled = false;
+                saveBtn.textContent = 'Save Edits';
+            }
+        });
+    }
+
+    const copyBtn = document.getElementById('copy-cover-letter-btn');
+    if (copyBtn) {
+        copyBtn.addEventListener('click', () => {
+            copyToClipboard(document.getElementById('standalone-cover-textarea').value);
+        });
+    }
+
+    const regenBtn = document.getElementById('regenerate-cover-letter-btn');
+    if (regenBtn) {
+        regenBtn.addEventListener('click', async () => {
+            regenBtn.disabled = true;
+            regenBtn.innerHTML = '<span class="spinner"></span> Regenerating...';
+            try {
+                const result = await api.generateCoverLetter(jobId);
+                document.getElementById('cover-letter-container').innerHTML = renderCoverLetterSection(result.cover_letter, jobId);
+                attachCoverLetterListeners(jobId);
+                showToast('Cover letter regenerated!', 'success');
+            } catch (err) {
+                showToast(err.message, 'error');
+                regenBtn.disabled = false;
+                regenBtn.textContent = 'Regenerate';
+            }
         });
     }
 }
