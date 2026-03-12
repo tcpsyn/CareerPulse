@@ -5,9 +5,13 @@ from app.scrapers.linkedin import LinkedInScraper
 from app.scrapers.dice import DiceScraper
 from app.scrapers.arbeitnow import ArbeitnowScraper
 from app.scrapers.jobicy import JobicyScraper
+from app.scrapers.indeed import IndeedScraper
+from app.scrapers.remoteok import RemoteOKScraper
+from app.scrapers.himalayas import HimalayasScraper
 
 ALL_SCRAPERS = [
     HackerNewsScraper, RemotiveScraper, USAJobsScraper,
     LinkedInScraper, DiceScraper,
-    ArbeitnowScraper, JobicyScraper,
+    ArbeitnowScraper, JobicyScraper, IndeedScraper,
+    RemoteOKScraper, HimalayasScraper,
 ]
