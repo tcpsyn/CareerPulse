@@ -2241,6 +2241,12 @@ function renderTabData(container) {
             <div id="autofill-history-list"><span class="spinner"></span></div>
         </div>
 
+        <div class="card" style="padding:24px;margin-bottom:24px">
+            <h2 style="font-size:1.125rem;font-weight:600;margin-bottom:16px">Scraper Schedule</h2>
+            <p style="color:var(--text-secondary);margin-bottom:16px;font-size:0.875rem">Configure how often each scraper runs. Set interval in hours (e.g. 168 = weekly).</p>
+            <div id="scraper-schedule-list"><span class="spinner"></span></div>
+        </div>
+
         <div class="card" style="padding:24px;margin-bottom:24px;border-left:4px solid var(--danger, #ef4444)">
             <h2 style="font-size:1.125rem;font-weight:600;margin-bottom:16px;color:var(--danger, #ef4444)">Danger Zone</h2>
             <div style="display:flex;flex-direction:column;gap:16px">
@@ -2275,6 +2281,52 @@ function renderTabData(container) {
         `).join('');
     }).catch(() => {
         container.querySelector('#autofill-history-list').innerHTML = '<p style="color:var(--text-tertiary)">Could not load history.</p>';
+    });
+
+    // Load scraper schedules
+    api.request('GET', '/api/scraper-schedule').then(data => {
+        const list = container.querySelector('#scraper-schedule-list');
+        const schedules = data.schedules || [];
+        if (!schedules.length) {
+            list.innerHTML = '<p style="color:var(--text-tertiary);font-size:0.875rem">No scraper schedules configured yet. Scrapers will use the global interval. Run a scrape cycle first to populate sources.</p>';
+            return;
+        }
+        list.innerHTML = `
+            <table style="width:100%;border-collapse:collapse;font-size:0.875rem">
+                <thead>
+                    <tr style="border-bottom:2px solid var(--border);text-align:left">
+                        <th style="padding:8px 12px">Source</th>
+                        <th style="padding:8px 12px">Interval (hours)</th>
+                        <th style="padding:8px 12px">Last Ran</th>
+                        <th style="padding:8px 12px"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    ${schedules.map(s => `
+                        <tr style="border-bottom:1px solid var(--border)" data-source="${escapeHtml(s.source_name)}">
+                            <td style="padding:8px 12px;font-weight:600">${escapeHtml(s.source_name)}</td>
+                            <td style="padding:8px 12px"><input type="number" min="1" value="${s.interval_hours}" style="width:80px;padding:4px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);background:var(--bg-surface);color:var(--text-primary)" class="schedule-interval"></td>
+                            <td style="padding:8px 12px;color:var(--text-secondary)">${s.last_scraped_at ? formatDate(s.last_scraped_at) : 'Never'}</td>
+                            <td style="padding:8px 12px"><button class="btn btn-secondary schedule-save-btn" style="padding:4px 12px;font-size:0.8125rem">Save</button></td>
+                        </tr>
+                    `).join('')}
+                </tbody>
+            </table>
+        `;
+        list.querySelectorAll('.schedule-save-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const row = btn.closest('tr');
+                const source_name = row.dataset.source;
+                const interval_hours = parseInt(row.querySelector('.schedule-interval').value, 10);
+                if (!interval_hours || interval_hours < 1) { showToast('Interval must be at least 1 hour', 'error'); return; }
+                try {
+                    await api.request('POST', '/api/scraper-schedule', { source_name, interval_hours });
+                    showToast(`Schedule updated for ${source_name}`, 'success');
+                } catch (err) { showToast(err.message, 'error'); }
+            });
+        });
+    }).catch(() => {
+        container.querySelector('#scraper-schedule-list').innerHTML = '<p style="color:var(--text-tertiary)">Could not load scraper schedules.</p>';
     });
 
     document.getElementById('clear-jobs-btn').addEventListener('click', async () => {

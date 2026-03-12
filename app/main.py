@@ -930,6 +930,23 @@ Rules:
             await app.state.db.save_scraper_key(name, api_key, email)
         return {"ok": True}
 
+    @app.get("/api/scraper-schedule")
+    async def get_scraper_schedule():
+        db = app.state.db
+        schedules = await db.get_all_scraper_schedules()
+        return {"schedules": schedules}
+
+    @app.post("/api/scraper-schedule")
+    async def update_scraper_schedule(request: Request):
+        data = await request.json()
+        db = app.state.db
+        source_name = data.get("source_name")
+        interval_hours = data.get("interval_hours")
+        if not source_name or interval_hours is None:
+            raise HTTPException(400, "source_name and interval_hours required")
+        await db.update_scraper_schedule(source_name, int(interval_hours))
+        return {"ok": True}
+
     @app.post("/api/resume/upload")
     async def upload_resume(file: UploadFile = File(...)):
         content = await file.read()

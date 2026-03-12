@@ -257,6 +257,11 @@ class Database:
                 glassdoor_rating REAL,
                 updated_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS scraper_schedule (
+                source_name TEXT PRIMARY KEY,
+                interval_hours INTEGER NOT NULL DEFAULT 6,
+                last_scraped_at TEXT
+            );
         """)
         await self._migrate()
         await self.db.commit()
@@ -702,6 +707,41 @@ class Database:
             (name, api_key, email, now)
         )
         await self.db.commit()
+
+    async def update_scraper_schedule(self, source_name: str, interval_hours: int):
+        await self.db.execute(
+            """INSERT INTO scraper_schedule (source_name, interval_hours)
+               VALUES (?, ?)
+               ON CONFLICT(source_name) DO UPDATE SET interval_hours = excluded.interval_hours""",
+            (source_name, interval_hours),
+        )
+        await self.db.commit()
+
+    async def mark_scraper_ran(self, source_name: str):
+        now = datetime.now(timezone.utc).isoformat()
+        await self.db.execute(
+            """INSERT INTO scraper_schedule (source_name, interval_hours, last_scraped_at)
+               VALUES (?, 6, ?)
+               ON CONFLICT(source_name) DO UPDATE SET last_scraped_at = excluded.last_scraped_at""",
+            (source_name, now),
+        )
+        await self.db.commit()
+
+    async def should_scraper_run(self, source_name: str) -> bool:
+        cursor = await self.db.execute(
+            "SELECT interval_hours, last_scraped_at FROM scraper_schedule WHERE source_name = ?",
+            (source_name,),
+        )
+        row = await cursor.fetchone()
+        if not row or not row["last_scraped_at"]:
+            return True
+        last = datetime.fromisoformat(row["last_scraped_at"])
+        interval = timedelta(hours=row["interval_hours"])
+        return datetime.now(timezone.utc) > last + interval
+
+    async def get_all_scraper_schedules(self) -> list[dict]:
+        cursor = await self.db.execute("SELECT * FROM scraper_schedule ORDER BY source_name")
+        return [dict(r) for r in await cursor.fetchall()]
 
     async def update_job_contact(self, job_id: int, **fields):
         sets = ", ".join(f"{k} = ?" for k in fields)

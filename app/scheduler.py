@@ -12,6 +12,12 @@ async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str]
         if isinstance(scraper_instance, type):
             scraper_instance = scraper_instance(search_terms=search_terms, scraper_keys=scraper_keys or {})
         source_name = scraper_instance.source_name
+        # Check per-source schedule
+        if not await db.should_scraper_run(source_name):
+            logger.info(f"Skipping {source_name} — not yet due")
+            if progress is not None:
+                progress.update({"completed": i + 1, "total": total_scrapers, "current": source_name, "new_jobs": total_new, "active": True})
+            continue
         logger.info(f"Scraping {source_name}...")
         if progress is not None:
             progress.update({"completed": i, "total": total_scrapers, "current": source_name, "new_jobs": total_new, "active": True})
@@ -53,6 +59,7 @@ async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str]
                         total_new += 1
 
         logger.info(f"{source_name}: found {len(listings)} listings")
+        await db.mark_scraper_ran(source_name)
 
     # Enrich jobs with short/missing descriptions
     from app.enrichment import enrich_job_description
