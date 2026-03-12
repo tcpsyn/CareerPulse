@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 
 import aiosqlite
@@ -8,6 +9,26 @@ import aiosqlite
 def make_dedup_hash(title: str, company: str, url: str) -> str:
     normalized = f"{title.lower().strip()}|{company.lower().strip()}|{url.lower().strip().rstrip('/')}"
     return hashlib.sha256(normalized.encode()).hexdigest()
+
+
+def _normalize_company(name: str) -> str:
+    """Normalize company name for fuzzy comparison."""
+    name = name.lower().strip()
+    for suffix in [" inc.", " inc", " llc", " ltd", " ltd.", " corp", " corporation",
+                   " co.", " co", " company", " group", " technologies", " technology"]:
+        if name.endswith(suffix):
+            name = name[:-len(suffix)].strip()
+    return re.sub(r"[^a-z0-9 ]", "", name).strip()
+
+
+def _title_similarity(t1: str, t2: str) -> float:
+    """Word overlap ratio between two job titles."""
+    w1 = set(t1.lower().split())
+    w2 = set(t2.lower().split())
+    if not w1 or not w2:
+        return 0.0
+    intersection = w1 & w2
+    return len(intersection) / max(len(w1), len(w2))
 
 
 class Database:
@@ -702,6 +723,22 @@ class Database:
         cursor = await self.db.execute(query, params)
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
+
+    async def find_cross_source_dupes(self, exclude_id: int, title: str, company: str) -> list[dict]:
+        """Find likely duplicate jobs from other sources using fuzzy company + title matching."""
+        norm_company = _normalize_company(company)
+        cursor = await self.db.execute(
+            "SELECT id, title, company, url FROM jobs WHERE id != ? AND dismissed = 0",
+            (exclude_id,),
+        )
+        rows = await cursor.fetchall()
+        dupes = []
+        for row in rows:
+            if _normalize_company(row["company"]) != norm_company:
+                continue
+            if _title_similarity(title, row["title"]) >= 0.7:
+                dupes.append(dict(row))
+        return dupes
 
     async def get_company(self, name: str) -> dict | None:
         normalized = name.lower().strip()

@@ -40,8 +40,17 @@ async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str]
                     contact_email=listing.contact_email,
                 )
                 if job_id:
-                    await db.insert_source(job_id, source_name, listing.url)
-                    total_new += 1
+                    # Check for cross-source duplicates
+                    dupes = await db.find_cross_source_dupes(job_id, listing.title, listing.company)
+                    if dupes:
+                        # Merge: add source to oldest existing job, dismiss this new one
+                        oldest = dupes[0]
+                        await db.insert_source(oldest["id"], source_name, listing.url)
+                        await db.dismiss_job(job_id)
+                        logger.debug(f"Dedup: merged '{listing.title}' @ {listing.company} into job {oldest['id']}")
+                    else:
+                        await db.insert_source(job_id, source_name, listing.url)
+                        total_new += 1
 
         logger.info(f"{source_name}: found {len(listings)} listings")
 
