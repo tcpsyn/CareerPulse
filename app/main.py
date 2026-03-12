@@ -456,6 +456,18 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
     async def get_stats():
         return await app.state.db.get_stats()
 
+    @app.get("/api/pipeline")
+    async def get_pipeline():
+        db = app.state.db
+        stats = await db.get_pipeline_stats()
+        return {"stats": stats}
+
+    @app.get("/api/pipeline/{status}")
+    async def get_pipeline_jobs(status: str):
+        db = app.state.db
+        jobs = await db.get_pipeline_jobs(status)
+        return {"jobs": jobs, "count": len(jobs)}
+
     @app.get("/api/export/csv")
     async def export_csv(
         min_score: int | None = Query(None),

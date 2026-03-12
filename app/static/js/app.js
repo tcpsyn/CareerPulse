@@ -186,6 +186,7 @@ function getRoute() {
         return { view: 'detail', id: parseInt(id, 10) };
     }
     if (hash === '#/stats') return { view: 'stats' };
+    if (hash === '#/pipeline') return { view: 'pipeline' };
     if (hash === '#/settings') return { view: 'settings' };
     return { view: 'feed' };
 }
@@ -201,6 +202,7 @@ function updateActiveNav() {
         link.classList.toggle('active',
             (r === 'feed' && route.view === 'feed') ||
             (r === 'stats' && route.view === 'stats') ||
+            (r === 'pipeline' && route.view === 'pipeline') ||
             (r === 'settings' && route.view === 'settings')
         );
     });
@@ -215,6 +217,8 @@ async function handleRoute() {
         await renderJobDetail(app, route.id);
     } else if (route.view === 'stats') {
         await renderStats(app);
+    } else if (route.view === 'pipeline') {
+        await renderPipeline(app);
     } else if (route.view === 'settings') {
         await renderSettings(app);
     } else {
@@ -1052,6 +1056,53 @@ function renderEmailPreview(email) {
             </div>
         </div>
     `;
+}
+
+// === Pipeline View ===
+async function renderPipeline(container) {
+    container.innerHTML = `<div class="loading-container"><div class="spinner spinner-lg"></div><span>Loading pipeline...</span></div>`;
+
+    const statuses = ['interested', 'prepared', 'applied', 'interviewing', 'offered', 'rejected'];
+    const statusLabels = {
+        interested: 'Interested', prepared: 'Prepared', applied: 'Applied',
+        interviewing: 'Interviewing', offered: 'Offered', rejected: 'Rejected'
+    };
+    const statusColors = {
+        interested: 'var(--text-secondary)', prepared: 'var(--accent)',
+        applied: 'var(--score-green)', interviewing: 'var(--score-amber)',
+        offered: '#22c55e', rejected: 'var(--danger)'
+    };
+
+    try {
+        const results = await Promise.all(
+            statuses.map(s => api.request('GET', `/api/pipeline/${s}`))
+        );
+
+        container.innerHTML = `
+            <h1 style="font-size:1.5rem;font-weight:700;letter-spacing:-0.02em;margin-bottom:24px">Pipeline</h1>
+            <div class="pipeline-board">
+                ${statuses.map((status, i) => `
+                    <div class="pipeline-column">
+                        <div class="pipeline-column-header" style="border-top: 3px solid ${statusColors[status]}">
+                            <span>${statusLabels[status]}</span>
+                            <span class="pipeline-count">${results[i].count}</span>
+                        </div>
+                        <div class="pipeline-cards">
+                            ${results[i].jobs.map(job => `
+                                <div class="card pipeline-card" onclick="navigate('#/job/${job.id}')">
+                                    <div class="pipeline-card-title">${escapeHtml(job.title)}</div>
+                                    <div class="pipeline-card-company">${escapeHtml(job.company)}</div>
+                                    ${job.match_score ? `<span class="score-badge ${getScoreClass(job.match_score)}" style="font-size:0.7rem">${job.match_score}</span>` : ''}
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    } catch (err) {
+        container.innerHTML = `<div class="empty-state"><div class="empty-state-title">Failed to load pipeline</div><div class="empty-state-desc">${escapeHtml(err.message)}</div></div>`;
+    }
 }
 
 // === Stats Dashboard View ===

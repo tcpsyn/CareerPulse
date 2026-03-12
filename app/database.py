@@ -353,6 +353,18 @@ class Database:
                 if col not in profile_columns:
                     await self.db.execute(sql)
 
+        # Applications table migrations
+        app_cursor = await self.db.execute("PRAGMA table_info(applications)")
+        app_columns = {row[1] for row in await app_cursor.fetchall()}
+        app_migrations = {
+            "rejected_at": "ALTER TABLE applications ADD COLUMN rejected_at TEXT",
+            "offered_at": "ALTER TABLE applications ADD COLUMN offered_at TEXT",
+            "withdrawn_at": "ALTER TABLE applications ADD COLUMN withdrawn_at TEXT",
+        }
+        for col, sql in app_migrations.items():
+            if col not in app_columns:
+                await self.db.execute(sql)
+
         # One-time migration: move notes from applications to app_events
         cursor = await self.db.execute(
             "SELECT job_id, notes FROM applications WHERE notes IS NOT NULL AND notes != ''"
@@ -491,6 +503,63 @@ class Database:
         cursor = await self.db.execute("SELECT * FROM applications WHERE job_id = ?", (job_id,))
         row = await cursor.fetchone()
         return dict(row) if row else None
+
+    async def upsert_application(self, job_id: int, status: str):
+        now = datetime.now(timezone.utc).isoformat()
+        existing = await self.get_application(job_id)
+        timestamp_fields = {
+            "applied": "applied_at",
+            "rejected": "rejected_at",
+            "offered": "offered_at",
+            "withdrawn": "withdrawn_at",
+        }
+        if existing:
+            sets = {"status": status}
+            ts_col = timestamp_fields.get(status)
+            if ts_col:
+                sets[ts_col] = now
+            set_clause = ", ".join(f"{k} = ?" for k in sets)
+            vals = list(sets.values()) + [existing["id"]]
+            await self.db.execute(f"UPDATE applications SET {set_clause} WHERE id = ?", vals)
+        else:
+            cols = ["job_id", "status"]
+            vals = [job_id, status]
+            ts_col = timestamp_fields.get(status)
+            if ts_col:
+                cols.append(ts_col)
+                vals.append(now)
+            placeholders = ", ".join("?" for _ in cols)
+            col_str = ", ".join(cols)
+            await self.db.execute(
+                f"INSERT INTO applications ({col_str}) VALUES ({placeholders})", vals
+            )
+        await self.db.commit()
+
+    async def get_pipeline_jobs(self, status: str) -> list[dict]:
+        cursor = await self.db.execute("""
+            SELECT j.id, j.title, j.company, j.location, j.url, j.created_at,
+                   js.match_score, a.status as app_status, a.applied_at
+            FROM jobs j
+            INNER JOIN applications a ON j.id = a.job_id
+            LEFT JOIN job_scores js ON j.id = js.job_id
+            WHERE a.status = ? AND j.dismissed = 0
+            ORDER BY COALESCE(a.applied_at, j.created_at) DESC
+        """, (status,))
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_pipeline_stats(self) -> dict:
+        cursor = await self.db.execute("""
+            SELECT a.status, COUNT(*) as count
+            FROM applications a
+            INNER JOIN jobs j ON j.id = a.job_id
+            WHERE j.dismissed = 0
+            GROUP BY a.status
+        """)
+        rows = await cursor.fetchall()
+        stats = {}
+        for row in rows:
+            stats[row["status"]] = row["count"]
+        return stats
 
     async def list_jobs(self, sort_by="score", limit=50, offset=0, min_score=None,
                         search=None, source=None, dismissed=False,

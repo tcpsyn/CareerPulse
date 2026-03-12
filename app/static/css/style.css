@@ -885,6 +885,57 @@ a:hover {
     display: none;
 }
 
+/* Pipeline board */
+.pipeline-board {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr);
+    gap: 12px;
+    min-height: 400px;
+}
+.pipeline-column {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+.pipeline-column-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px;
+    background: var(--bg-surface);
+    border-radius: var(--radius-sm);
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+.pipeline-count {
+    background: var(--bg);
+    padding: 2px 8px;
+    border-radius: 99px;
+    font-size: 0.75rem;
+}
+.pipeline-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex: 1;
+}
+.pipeline-card {
+    padding: 10px;
+    cursor: pointer;
+}
+.pipeline-card:hover {
+    transform: translateY(-1px);
+}
+.pipeline-card-title {
+    font-size: 0.8rem;
+    font-weight: 500;
+    margin-bottom: 4px;
+}
+.pipeline-card-company {
+    font-size: 0.7rem;
+    color: var(--text-secondary);
+}
+
 /* === Toast Notifications === */
 #toast-container {
     position: fixed;
@@ -1099,6 +1150,10 @@ a:hover {
 
     .pipeline-stage::after {
         display: none;
+    }
+
+    .pipeline-board {
+        grid-template-columns: 1fr;
     }
 
     .stats-grid {
