@@ -5,13 +5,16 @@ from app.database import Database, make_dedup_hash
 logger = logging.getLogger(__name__)
 
 
-async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str] | None = None) -> int:
+async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str] | None = None, progress: dict | None = None, scraper_keys: dict | None = None) -> int:
     total_new = 0
-    for scraper_instance in scrapers:
+    total_scrapers = len(scrapers)
+    for i, scraper_instance in enumerate(scrapers):
         if isinstance(scraper_instance, type):
-            scraper_instance = scraper_instance(search_terms=search_terms)
+            scraper_instance = scraper_instance(search_terms=search_terms, scraper_keys=scraper_keys or {})
         source_name = scraper_instance.source_name
         logger.info(f"Scraping {source_name}...")
+        if progress is not None:
+            progress.update({"completed": i, "total": total_scrapers, "current": source_name, "new_jobs": total_new, "active": True})
         try:
             listings = await scraper_instance.scrape()
         except Exception as e:
@@ -41,5 +44,7 @@ async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str]
                     total_new += 1
 
         logger.info(f"{source_name}: found {len(listings)} listings")
+    if progress is not None:
+        progress.update({"completed": total_scrapers, "total": total_scrapers, "current": None, "new_jobs": total_new, "active": False})
     logger.info(f"Scrape cycle complete. {total_new} new jobs added.")
     return total_new

@@ -512,6 +512,7 @@ function renderJobDetailContent(container, job, profile = {}, companyInfo = null
                         <a href="${escapeHtml(job.url)}" target="_blank" class="btn btn-secondary">
                             Open Job Listing
                         </a>
+                        <button class="btn btn-secondary" id="copy-listing-link-btn">Copy Listing Link</button>
                         ${(job.hiring_manager_email || job.contact_email) ? `<button class="btn btn-secondary" id="email-btn">Draft Email</button>` : ''}
                     </div>
                     ${application?.status !== 'applied' ? `
@@ -723,6 +724,18 @@ function renderJobDetailContent(container, job, profile = {}, companyInfo = null
             showToast(err.message, 'error');
         }
     });
+
+    const copyLinkBtn = document.getElementById('copy-listing-link-btn');
+    if (copyLinkBtn) {
+        copyLinkBtn.addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(job.url);
+                showToast('Link copied!', 'success');
+            } catch {
+                showToast('Failed to copy link', 'error');
+            }
+        });
+    }
 
     const markAppliedBtn = document.getElementById('mark-applied-btn');
     if (markAppliedBtn) {
@@ -977,16 +990,62 @@ async function renderStats(container) {
 
         document.getElementById('stats-scrape-btn').addEventListener('click', handleScrape);
         const scoreBtn = document.getElementById('stats-score-btn');
+        let scoringPollInterval = null;
+        function stopScoringPoll() {
+            if (scoringPollInterval) { clearInterval(scoringPollInterval); scoringPollInterval = null; }
+        }
+        function startScoringPoll() {
+            stopScoringPoll();
+            scoringPollInterval = setInterval(async () => {
+                try {
+                    const p = await api.request('GET', '/api/score/progress');
+                    if (p.active && p.total > 0) {
+                        const pct = Math.round((p.scored / p.total) * 100);
+                        scoreBtn.innerHTML = `<span class="spinner"></span> ${p.scored}/${p.total} (${pct}%)`;
+                    } else if (!p.active && p.total > 0) {
+                        stopScoringPoll();
+                        scoreBtn.disabled = false;
+                        scoreBtn.textContent = 'All Scored';
+                        showToast(`Scored ${p.scored} jobs`, 'success');
+                        loadPage('stats');
+                    }
+                } catch {}
+            }, 2000);
+        }
         scoreBtn.addEventListener('click', async () => {
             scoreBtn.disabled = true;
-            scoreBtn.innerHTML = '<span class="spinner"></span> Scoring...';
+            scoreBtn.innerHTML = '<span class="spinner"></span> Starting...';
             try {
                 await api.request('POST', '/api/score');
-                showToast('Scoring started in background', 'success');
+                startScoringPoll();
             } catch (err) {
+                scoreBtn.disabled = false;
+                scoreBtn.textContent = 'Score';
                 showToast(err.message, 'error');
             }
         });
+        // Check if scoring is already in progress
+        try {
+            const p = await api.request('GET', '/api/score/progress');
+            if (p.active) {
+                scoreBtn.disabled = true;
+                scoreBtn.innerHTML = `<span class="spinner"></span> ${p.scored}/${p.total}`;
+                startScoringPoll();
+            }
+        } catch {}
+        // Check if scraping is already in progress
+        try {
+            const sp = await api.request('GET', '/api/scrape/progress');
+            if (sp.active) {
+                const scrapeBtn = document.getElementById('stats-scrape-btn');
+                if (scrapeBtn) {
+                    scrapeBtn.disabled = true;
+                    const label = sp.current ? `${sp.current} (${sp.completed}/${sp.total})` : `${sp.completed}/${sp.total}`;
+                    scrapeBtn.innerHTML = `<span class="spinner"></span> ${label}`;
+                }
+                startScrapePoll();
+            }
+        } catch {}
         document.getElementById('stats-export-btn').addEventListener('click', () => {
             window.location.href = '/api/export/csv';
         });
@@ -1034,18 +1093,44 @@ async function renderStats(container) {
 }
 
 // === Scrape Handler ===
+let scrapePollInterval = null;
+function stopScrapePoll() {
+    if (scrapePollInterval) { clearInterval(scrapePollInterval); scrapePollInterval = null; }
+}
+function startScrapePoll() {
+    stopScrapePoll();
+    const btn = document.getElementById('scrape-btn') || document.getElementById('stats-scrape-btn');
+    scrapePollInterval = setInterval(async () => {
+        try {
+            const p = await api.request('GET', '/api/scrape/progress');
+            if (p.active && btn) {
+                const label = p.current ? `${p.current} (${p.completed}/${p.total})` : `${p.completed}/${p.total}`;
+                btn.innerHTML = `<span class="spinner"></span> ${label}`;
+            } else if (!p.active) {
+                stopScrapePoll();
+                if (btn) {
+                    btn.disabled = false;
+                    btn.textContent = 'Scrape Now';
+                }
+                if (p.total > 0) {
+                    showToast(`Scrape done — ${p.new_jobs} new jobs found`, 'success');
+                    loadPage('stats');
+                }
+            }
+        } catch {}
+    }, 2000);
+}
 async function handleScrape() {
     const btn = document.getElementById('scrape-btn') || document.getElementById('stats-scrape-btn');
     if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span> Scraping...';
+        btn.innerHTML = '<span class="spinner"></span> Starting...';
     }
     try {
         await api.triggerScrape();
-        showToast('Scrape started! New jobs will appear shortly.', 'info');
+        startScrapePoll();
     } catch (err) {
         showToast(err.message, 'error');
-    } finally {
         if (btn) {
             btn.disabled = false;
             btn.textContent = 'Scrape Now';
@@ -1058,16 +1143,60 @@ async function renderSettings(container) {
     container.innerHTML = `<div class="loading-container"><div class="spinner spinner-lg"></div><span>Loading settings...</span></div>`;
 
     try {
-        const [config, aiSettings, profile] = await Promise.all([
+        const [config, aiSettings, profile, scraperKeys] = await Promise.all([
             api.getSearchConfig(),
             api.getAISettings(),
             api.request('GET', '/api/profile'),
+            api.request('GET', '/api/scraper-keys'),
         ]);
         renderSettingsContent(container, config, aiSettings, profile);
+        loadScraperKeys(scraperKeys);
     } catch (err) {
         showToast(err.message, 'error');
         container.innerHTML = `<div class="empty-state"><div class="empty-state-title">Could not load settings</div></div>`;
     }
+}
+
+function loadScraperKeys(keys) {
+    if (keys.usajobs) {
+        if (keys.usajobs.has_key) document.getElementById('scraper-key-usajobs').value = '****';
+        if (keys.usajobs.email) document.getElementById('scraper-email-usajobs').value = keys.usajobs.email;
+    }
+    if (keys.adzuna) {
+        if (keys.adzuna.has_key) document.getElementById('scraper-key-adzuna').value = '****';
+    }
+    if (keys['adzuna-id']) {
+        if (keys['adzuna-id'].has_key) document.getElementById('scraper-key-adzuna-id').value = '****';
+    }
+    if (keys.jsearch) {
+        if (keys.jsearch.has_key) document.getElementById('scraper-key-jsearch').value = '****';
+    }
+    document.getElementById('save-scraper-keys-btn').addEventListener('click', async () => {
+        const payload = {
+            usajobs: {
+                api_key: document.getElementById('scraper-key-usajobs').value,
+                email: document.getElementById('scraper-email-usajobs').value,
+            },
+            'adzuna-id': {
+                api_key: document.getElementById('scraper-key-adzuna-id').value,
+                email: '',
+            },
+            adzuna: {
+                api_key: document.getElementById('scraper-key-adzuna').value,
+                email: '',
+            },
+            jsearch: {
+                api_key: document.getElementById('scraper-key-jsearch').value,
+                email: '',
+            },
+        };
+        try {
+            await api.request('POST', '/api/scraper-keys', payload);
+            showToast('Scraper keys saved', 'success');
+        } catch (err) {
+            showToast(err.message, 'error');
+        }
+    });
 }
 
 function renderSettingsContent(container, config, aiSettings = {}, profile = {}) {
@@ -1162,13 +1291,21 @@ function renderSettingsContent(container, config, aiSettings = {}, profile = {})
                     <label style="display:block;font-size:0.8125rem;font-weight:600;color:var(--text-tertiary);margin-bottom:4px">Provider</label>
                     <select class="filter-select" id="ai-provider" style="width:100%">
                         <option value="anthropic" ${aiProvider === 'anthropic' ? 'selected' : ''}>Anthropic (Claude)</option>
+                        <option value="openai" ${aiProvider === 'openai' ? 'selected' : ''}>OpenAI</option>
+                        <option value="google" ${aiProvider === 'google' ? 'selected' : ''}>Google (Gemini)</option>
+                        <option value="openrouter" ${aiProvider === 'openrouter' ? 'selected' : ''}>OpenRouter</option>
                         <option value="ollama" ${aiProvider === 'ollama' ? 'selected' : ''}>Ollama (Local)</option>
                     </select>
                 </div>
                 <div>
                     <label style="display:block;font-size:0.8125rem;font-weight:600;color:var(--text-tertiary);margin-bottom:4px">Model</label>
                     <div id="ai-model-container">
-                        <input type="text" class="search-input" id="ai-model" placeholder="e.g. claude-sonnet-4-20250514" value="${escapeHtml(aiModel)}" style="width:100%;${aiProvider === 'ollama' ? 'display:none' : ''}">
+                        <input type="text" class="search-input" id="ai-model" placeholder="${
+                            aiProvider === 'openai' ? 'e.g. gpt-4o' :
+                            aiProvider === 'google' ? 'e.g. gemini-2.0-flash' :
+                            aiProvider === 'openrouter' ? 'e.g. anthropic/claude-sonnet-4' :
+                            'e.g. claude-sonnet-4-20250514'
+                        }" value="${escapeHtml(aiModel)}" style="width:100%;${aiProvider === 'ollama' ? 'display:none' : ''}">
                         <div id="ai-model-ollama" style="${aiProvider === 'ollama' ? '' : 'display:none'}">
                             <div style="display:flex;gap:8px;align-items:center">
                                 <select class="filter-select" id="ai-model-select" style="flex:1">
@@ -1185,7 +1322,7 @@ function renderSettingsContent(container, config, aiSettings = {}, profile = {})
                 <input type="password" class="search-input" id="ai-api-key" placeholder="${hasKey ? 'Key configured (leave blank to keep)' : 'Enter API key'}" value="${escapeHtml(aiKey)}" style="width:100%">
             </div>
             <div id="ai-url-row" style="margin-bottom:16px;${aiProvider === 'ollama' ? '' : 'display:none'}">
-                <label style="display:block;font-size:0.8125rem;font-weight:600;color:var(--text-tertiary);margin-bottom:4px">Ollama URL</label>
+                <label id="ai-url-label" style="display:block;font-size:0.8125rem;font-weight:600;color:var(--text-tertiary);margin-bottom:4px">Ollama URL</label>
                 <input type="text" class="search-input" id="ai-base-url" placeholder="http://localhost:11434" value="${escapeHtml(aiBaseUrl)}" style="width:100%">
             </div>
             <div style="display:flex;gap:12px">
@@ -1289,6 +1426,41 @@ function renderSettingsContent(container, config, aiSettings = {}, profile = {})
 
         ${config.updated_at ? `<p style="color:var(--text-tertiary);font-size:0.8125rem;margin-bottom:24px">Last updated: ${formatDate(config.updated_at)}</p>` : ''}
 
+        <div class="card" style="padding:24px;margin-bottom:24px">
+            <h2 style="font-size:1.125rem;font-weight:600;margin-bottom:8px">Scraper API Keys</h2>
+            <p style="color:var(--text-secondary);margin-bottom:16px;font-size:0.875rem">
+                Optional API keys to enable additional job sources.
+            </p>
+            <div style="display:flex;flex-direction:column;gap:16px">
+                <div>
+                    <label style="display:block;font-size:0.8125rem;font-weight:600;color:var(--text-tertiary);margin-bottom:4px">
+                        USAJobs API Key
+                        <a href="https://developer.usajobs.gov/APIRequest/Index" target="_blank" style="font-weight:400;color:var(--accent)">(get key)</a>
+                    </label>
+                    <input type="password" class="search-input" id="scraper-key-usajobs" placeholder="API key" style="margin-bottom:4px">
+                    <label style="display:block;font-size:0.8125rem;font-weight:600;color:var(--text-tertiary);margin-bottom:4px;margin-top:4px">USAJobs Email</label>
+                    <input type="email" class="search-input" id="scraper-email-usajobs" placeholder="Email used when registering">
+                </div>
+                <div>
+                    <label style="display:block;font-size:0.8125rem;font-weight:600;color:var(--text-tertiary);margin-bottom:4px">
+                        Adzuna App ID
+                        <a href="https://developer.adzuna.com" target="_blank" style="font-weight:400;color:var(--accent)">(get key)</a>
+                    </label>
+                    <input type="password" class="search-input" id="scraper-key-adzuna-id" placeholder="App ID" style="margin-bottom:4px">
+                    <label style="display:block;font-size:0.8125rem;font-weight:600;color:var(--text-tertiary);margin-bottom:4px;margin-top:4px">Adzuna App Key</label>
+                    <input type="password" class="search-input" id="scraper-key-adzuna" placeholder="App key">
+                </div>
+                <div>
+                    <label style="display:block;font-size:0.8125rem;font-weight:600;color:var(--text-tertiary);margin-bottom:4px">
+                        JSearch (RapidAPI) Key
+                        <a href="https://rapidapi.com/letscrape-6bRBa3QguO5/api/jsearch" target="_blank" style="font-weight:400;color:var(--accent)">(get key)</a>
+                    </label>
+                    <input type="password" class="search-input" id="scraper-key-jsearch" placeholder="RapidAPI key">
+                </div>
+            </div>
+            <button class="btn btn-primary" id="save-scraper-keys-btn" style="margin-top:16px">Save Scraper Keys</button>
+        </div>
+
         <div class="card" style="padding:24px;margin-bottom:24px;border-left:4px solid var(--danger, #ef4444)">
             <h2 style="font-size:1.125rem;font-weight:600;margin-bottom:16px;color:var(--danger, #ef4444)">Danger Zone</h2>
             <div style="display:flex;flex-direction:column;gap:16px">
@@ -1386,11 +1558,20 @@ function renderSettingsContent(container, config, aiSettings = {}, profile = {})
     });
 
     // AI provider toggle
+    const modelPlaceholders = {
+        anthropic: 'e.g. claude-sonnet-4-20250514',
+        openai: 'e.g. gpt-4o',
+        google: 'e.g. gemini-2.0-flash',
+        openrouter: 'e.g. anthropic/claude-sonnet-4',
+        ollama: '',
+    };
     document.getElementById('ai-provider').addEventListener('change', (e) => {
-        const isOllama = e.target.value === 'ollama';
+        const provider = e.target.value;
+        const isOllama = provider === 'ollama';
         document.getElementById('ai-key-row').style.display = isOllama ? 'none' : '';
         document.getElementById('ai-url-row').style.display = isOllama ? '' : 'none';
         document.getElementById('ai-model').style.display = isOllama ? 'none' : '';
+        document.getElementById('ai-model').placeholder = modelPlaceholders[provider] || '';
         document.getElementById('ai-model-ollama').style.display = isOllama ? '' : 'none';
         if (isOllama) fetchOllamaModels();
     });

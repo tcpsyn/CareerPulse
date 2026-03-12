@@ -115,6 +115,13 @@ class Database:
                 updated_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_events_job ON app_events(job_id);
+            CREATE TABLE IF NOT EXISTS scraper_keys (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL,
+                api_key TEXT NOT NULL DEFAULT '',
+                email TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            );
             CREATE TABLE IF NOT EXISTS companies (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -412,6 +419,29 @@ class Database:
                base_url = excluded.base_url,
                updated_at = excluded.updated_at""",
             (provider, api_key, model, base_url, now)
+        )
+        await self.db.commit()
+
+    async def get_scraper_keys(self) -> dict:
+        cursor = await self.db.execute("SELECT name, api_key, email FROM scraper_keys")
+        rows = await cursor.fetchall()
+        return {row["name"]: {"api_key": row["api_key"], "email": row["email"]} for row in rows}
+
+    async def get_scraper_key(self, name: str) -> dict | None:
+        cursor = await self.db.execute("SELECT api_key, email FROM scraper_keys WHERE name = ?", (name,))
+        row = await cursor.fetchone()
+        return dict(row) if row else None
+
+    async def save_scraper_key(self, name: str, api_key: str = "", email: str = ""):
+        now = datetime.now(timezone.utc).isoformat()
+        await self.db.execute(
+            """INSERT INTO scraper_keys (name, api_key, email, updated_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(name) DO UPDATE SET
+               api_key = excluded.api_key,
+               email = excluded.email,
+               updated_at = excluded.updated_at""",
+            (name, api_key, email, now)
         )
         await self.db.commit()
 

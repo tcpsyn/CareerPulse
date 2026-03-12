@@ -12,11 +12,12 @@ class USAJobsScraper(BaseScraper):
     source_name = "usajobs"
 
     async def scrape(self) -> list[JobListing]:
-        api_key = os.environ.get("USAJOBS_API_KEY", "")
-        email = os.environ.get("USAJOBS_EMAIL", "")
+        keys = self.scraper_keys.get("usajobs", {})
+        api_key = keys.get("api_key", "") or os.environ.get("USAJOBS_API_KEY", "")
+        email = keys.get("email", "") or os.environ.get("USAJOBS_EMAIL", "")
 
         if not api_key:
-            logger.warning("USAJOBS_API_KEY not set, skipping USAJobs scraper")
+            logger.warning("USAJOBS API key not configured, skipping")
             return []
 
         headers = {

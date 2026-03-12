@@ -26,8 +26,8 @@ def _build_ai_client(ai_settings: dict | None, env_key: str = "") -> AIClient | 
         base_url = ai_settings.get("base_url", "")
         if provider == "ollama":
             return AIClient(provider, model=model, base_url=base_url)
-        if provider == "anthropic" and api_key:
-            return AIClient(provider, api_key=api_key, model=model)
+        if api_key:
+            return AIClient(provider, api_key=api_key, model=model, base_url=base_url)
     if env_key:
         return AIClient("anthropic", api_key=env_key)
     return None
@@ -85,8 +85,9 @@ async def lifespan(app: FastAPI):
             db = app.state.db
             config = await db.get_search_config()
             terms = config["search_terms"] if config else []
-            scrapers = [s(search_terms=terms) for s in ALL_SCRAPERS]
-            await run_scrape_cycle(db, scrapers, search_terms=terms)
+            keys = await db.get_scraper_keys()
+            scrapers = [s(search_terms=terms, scraper_keys=keys) for s in ALL_SCRAPERS]
+            await run_scrape_cycle(db, scrapers, search_terms=terms, scraper_keys=keys)
             await _score_unscored(db)
 
         scheduler.add_job(
@@ -114,23 +115,36 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
     app.state.db_path = db_path
     app.state.testing = testing
 
+    app.state.scoring_progress = None
+    app.state.scrape_progress = None
+
     async def _score_unscored(db):
         matcher = app.state.matcher
         if not matcher:
             logger.warning("Matcher not available, skipping scoring")
             return
-        while True:
-            unscored = await db.get_unscored_jobs(limit=20)
-            if not unscored:
-                break
-            logger.info(f"Scoring {len(unscored)} unscored jobs...")
-            results = await matcher.batch_score(unscored, delay=1.0)
-            for r in results:
-                await db.insert_score(
-                    r["job_id"], r["score"], r["reasons"],
-                    r["concerns"], r["keywords"],
-                )
-            logger.info(f"Scored {len(results)} jobs")
+        all_unscored = await db.get_unscored_jobs(limit=10000)
+        total = len(all_unscored)
+        if total == 0:
+            return
+        app.state.scoring_progress = {"scored": 0, "total": total, "active": True}
+        scored = 0
+        batch_size = 5
+        try:
+            for i in range(0, total, batch_size):
+                batch = all_unscored[i:i + batch_size]
+                results = await matcher.score_batch(batch)
+                for r in results:
+                    await db.insert_score(
+                        r["job_id"], r["score"], r["reasons"],
+                        r["concerns"], r["keywords"],
+                    )
+                scored += len(results)
+                app.state.scoring_progress = {"scored": scored, "total": total, "active": True}
+                logger.info(f"Scored {scored}/{total} jobs")
+        finally:
+            app.state.scoring_progress = {"scored": scored, "total": total, "active": False}
+            logger.info(f"Scoring complete: {scored}/{total} jobs")
 
     def _reinit_ai_services(client: AIClient | None, resume_text: str = ""):
         """Re-initialize matcher and tailor with new AI client."""
@@ -468,15 +482,26 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
                 db = app.state.db
                 config = await db.get_search_config()
                 terms = config["search_terms"] if config else []
-                scrapers = [s(search_terms=terms) for s in ALL_SCRAPERS]
-                await run_scrape_cycle(db, scrapers, search_terms=terms)
+                keys = await db.get_scraper_keys()
+                scrapers = [s(search_terms=terms, scraper_keys=keys) for s in ALL_SCRAPERS]
+                app.state.scrape_progress = {"completed": 0, "total": len(scrapers), "current": None, "new_jobs": 0, "active": True}
+                await run_scrape_cycle(db, scrapers, search_terms=terms, progress=app.state.scrape_progress, scraper_keys=keys)
 
                 await _score_unscored(db)
             except Exception:
                 logger.exception("Background scrape+score failed")
+                if app.state.scrape_progress:
+                    app.state.scrape_progress["active"] = False
 
         asyncio.create_task(_scrape_and_score())
         return {"status": "triggered"}
+
+    @app.get("/api/scrape/progress")
+    async def scrape_progress():
+        progress = app.state.scrape_progress
+        if not progress:
+            return {"active": False, "completed": 0, "total": 0, "current": None, "new_jobs": 0}
+        return progress
 
     @app.post("/api/score")
     async def trigger_score():
@@ -488,6 +513,13 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
 
         asyncio.create_task(_run_scoring())
         return {"status": "scoring_triggered"}
+
+    @app.get("/api/score/progress")
+    async def score_progress():
+        progress = app.state.scoring_progress
+        if not progress:
+            return {"active": False, "scored": 0, "total": 0}
+        return progress
 
     @app.get("/api/profile")
     async def get_profile():
@@ -561,8 +593,9 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
         model = body.get("model", "")
         base_url = body.get("base_url", "")
 
-        if provider not in ("anthropic", "ollama"):
-            raise HTTPException(400, "Provider must be 'anthropic' or 'ollama'")
+        from app.ai_client import ALL_PROVIDERS
+        if provider not in ALL_PROVIDERS:
+            raise HTTPException(400, f"Provider must be one of: {', '.join(ALL_PROVIDERS)}")
 
         # If api_key is masked (starts with ****), keep existing key
         if api_key.startswith("****"):
@@ -622,6 +655,32 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
             return {"ok": True, "response": response.strip()[:50]}
         except Exception as e:
             return {"ok": False, "error": str(e)}
+
+    @app.get("/api/scraper-keys")
+    async def get_scraper_keys():
+        keys = await app.state.db.get_scraper_keys()
+        result = {}
+        for name, data in keys.items():
+            result[name] = {
+                "has_key": bool(data["api_key"]),
+                "email": data["email"],
+            }
+        return result
+
+    @app.post("/api/scraper-keys")
+    async def save_scraper_keys(request: Request):
+        body = await request.json()
+        for name, data in body.items():
+            api_key = data.get("api_key", "")
+            email = data.get("email", "")
+            if api_key.startswith("****"):
+                existing = await app.state.db.get_scraper_key(name)
+                if existing:
+                    api_key = existing["api_key"]
+                else:
+                    api_key = ""
+            await app.state.db.save_scraper_key(name, api_key, email)
+        return {"ok": True}
 
     @app.post("/api/resume/upload")
     async def upload_resume(file: UploadFile = File(...)):
