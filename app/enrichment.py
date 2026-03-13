@@ -4,6 +4,11 @@ import re
 import httpx
 from bs4 import BeautifulSoup
 
+from app.circuit_breaker import CircuitBreaker
+from app.rate_limiter import get_limiter, get_limiter_for_url
+
+_enrichment_breaker = CircuitBreaker(failure_threshold=5, cooldown_seconds=300.0)
+
 try:
     from playwright.async_api import async_playwright
     PLAYWRIGHT_AVAILABLE = True
@@ -28,6 +33,7 @@ async def fetch_linkedin_guest_api(job_id: str) -> str | None:
     """Fetch job description from LinkedIn's guest jobs API."""
     url = f"https://www.linkedin.com/jobs-guest/jobs/api/jobPosting/{job_id}"
     try:
+        await get_limiter("www.linkedin.com").acquire()
         async with httpx.AsyncClient(headers=HEADERS, timeout=15.0, follow_redirects=True) as client:
             resp = await client.get(url)
             resp.raise_for_status()
@@ -50,6 +56,7 @@ async def fetch_linkedin_playwright(url: str) -> str | None:
         return None
 
     try:
+        await get_limiter("www.linkedin.com").acquire()
         async with async_playwright() as pw:
             browser = await pw.chromium.launch(headless=True)
             try:
@@ -83,10 +90,21 @@ async def enrich_job_description(url: str, source: str) -> str | None:
     2. Playwright headless browser (if installed)
     3. Direct page fetch (original behavior)
     """
-    if source == "linkedin":
-        return await _enrich_linkedin(url)
+    service = f"enrich:{source}"
+    if _enrichment_breaker.is_open(service):
+        logger.debug(f"Circuit breaker open for '{service}', skipping enrichment")
+        return None
 
-    return await _fetch_and_extract(url, source)
+    if source == "linkedin":
+        result = await _enrich_linkedin(url)
+    else:
+        result = await _fetch_and_extract(url, source)
+
+    if result:
+        _enrichment_breaker.record_success(service)
+    else:
+        _enrichment_breaker.record_failure(service)
+    return result
 
 
 async def _enrich_linkedin(url: str) -> str | None:
@@ -112,6 +130,7 @@ async def _enrich_linkedin(url: str) -> str | None:
 async def _fetch_and_extract(url: str, source: str) -> str | None:
     """Original direct-fetch enrichment logic."""
     try:
+        await get_limiter_for_url(url).acquire()
         async with httpx.AsyncClient(headers=HEADERS, timeout=15.0, follow_redirects=True) as client:
             resp = await client.get(url)
             resp.raise_for_status()

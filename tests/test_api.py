@@ -29,7 +29,14 @@ async def client(app):
 async def test_health(client):
     resp = await client.get("/api/health")
     assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
+    data = resp.json()
+    assert data["status"] == "healthy"
+    assert data["db"] == "ok"
+    assert data["scheduler"] in ("running", "stopped", "not_configured")
+    assert "ai_provider" in data
+    assert "ai_configured" in data
+    assert "last_scrape" in data
+    assert "uptime_seconds" in data
 
 
 @pytest.mark.asyncio

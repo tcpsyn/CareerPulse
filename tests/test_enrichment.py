@@ -241,7 +241,12 @@ async def test_fetch_linkedin_playwright_success():
     mock_pw.__aenter__ = AsyncMock(return_value=mock_pw_instance)
     mock_pw.__aexit__ = AsyncMock(return_value=False)
 
-    with patch("app.enrichment.async_playwright", return_value=mock_pw):
+    mock_limiter = AsyncMock()
+    mock_limiter.acquire = AsyncMock()
+
+    with patch("app.enrichment.async_playwright", return_value=mock_pw), \
+         patch("app.enrichment.get_limiter", return_value=mock_limiter), \
+         patch("app.enrichment.PLAYWRIGHT_AVAILABLE", True):
         result = await fetch_linkedin_playwright("https://www.linkedin.com/jobs/view/123456789")
 
     assert result is not None

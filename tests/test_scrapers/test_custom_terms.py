@@ -31,20 +31,20 @@ async def test_indeed_uses_custom_terms(httpx_mock):
 
 
 @pytest.mark.asyncio
-async def test_linkedin_builds_custom_query():
+async def test_linkedin_builds_params():
     scraper = LinkedInScraper(search_terms=["devops", "SRE", "cloud"])
-    query = scraper._build_query()
-    assert "site:linkedin.com/jobs" in query
-    assert '"devops"' in query
-    assert '"SRE"' in query
+    params = scraper._build_params("devops")
+    assert params["keywords"] == "devops"
+    assert "location" in params
+    assert "f_TPR" in params
 
 
 @pytest.mark.asyncio
-async def test_dice_builds_custom_query():
+async def test_dice_builds_params():
     scraper = DiceScraper(search_terms=["devops", "platform"])
-    query = scraper._build_query()
-    assert "site:dice.com/job-detail" in query
-    assert '"devops"' in query
+    params = scraper._build_params("devops")
+    assert params["q"] == "devops"
+    assert params["countryCode"] == "US"
 
 
 def test_remotive_maps_categories():

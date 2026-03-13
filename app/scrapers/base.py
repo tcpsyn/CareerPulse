@@ -4,6 +4,8 @@ from typing import Optional
 
 import httpx
 
+from app.rate_limiter import get_limiter_for_url
+
 
 def clean_text(text: str) -> str:
     """Decode HTML entities and fix mojibake in scraped text."""
@@ -56,6 +58,11 @@ class BaseScraper:
             timeout=30.0,
             follow_redirects=True,
         )
+
+    async def rate_limited_get(self, client: httpx.AsyncClient, url: str, **kwargs) -> httpx.Response:
+        """Make a GET request with per-domain rate limiting."""
+        await get_limiter_for_url(url).acquire()
+        return await client.get(url, **kwargs)
 
     async def scrape(self) -> list[JobListing]:
         raise NotImplementedError

@@ -5,9 +5,10 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request, UploadFile, File
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+import time as _time
 from datetime import datetime, timezone
 
 from app.database import Database
@@ -44,7 +45,7 @@ async def lifespan(app: FastAPI):
     if not testing:
         from app.config import Settings
         from app.scrapers import ALL_SCRAPERS
-        from app.scheduler import run_scrape_cycle
+        from app.scheduler import run_scrape_cycle, run_enrichment_cycle, run_maintenance_cycle, run_reminder_check, run_digest_cycle
 
         settings = Settings()
 
@@ -88,12 +89,56 @@ async def lifespan(app: FastAPI):
             keys = await db.get_scraper_keys()
             scrapers = [s(search_terms=terms, scraper_keys=keys) for s in ALL_SCRAPERS]
             await run_scrape_cycle(db, scrapers, search_terms=terms, scraper_keys=keys)
-            await _score_unscored(db)
+
+        async def scheduled_enrichment():
+            await run_enrichment_cycle(app.state.db)
+
+        async def scheduled_scoring():
+            await _score_unscored(app.state.db)
+
+        async def scheduled_maintenance():
+            await run_maintenance_cycle(app.state.db)
+
+        async def scheduled_reminder_check():
+            due = await run_reminder_check(app.state.db)
+            for r in due:
+                await app.state.db.add_event(
+                    r["job_id"], "reminder_due",
+                    f"Follow-up reminder due for {r.get('company', 'unknown')}"
+                )
+
+        async def scheduled_digest():
+            await run_digest_cycle(app.state.db)
 
         scheduler.add_job(
             scheduled_scrape, "interval",
             hours=settings.scrape_interval_hours,
             id="scrape_cycle",
+        )
+        scheduler.add_job(
+            scheduled_enrichment, "interval",
+            hours=2,
+            id="enrichment_cycle",
+        )
+        scheduler.add_job(
+            scheduled_scoring, "interval",
+            hours=1,
+            id="scoring_cycle",
+        )
+        scheduler.add_job(
+            scheduled_maintenance, "interval",
+            hours=24,
+            id="maintenance_cycle",
+        )
+        scheduler.add_job(
+            scheduled_reminder_check, "interval",
+            hours=12,
+            id="reminder_check",
+        )
+        scheduler.add_job(
+            scheduled_digest, "cron",
+            hour=8,
+            id="digest_cycle",
         )
         scheduler.start()
         app.state.scheduler = scheduler
@@ -102,6 +147,8 @@ async def lifespan(app: FastAPI):
         app.state.tailor = None
         app.state.ai_client = None
         app.state.scheduler = None
+
+    app.state.start_time = _time.monotonic()
 
     yield
 
@@ -117,6 +164,23 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
 
     app.state.scoring_progress = None
     app.state.scrape_progress = None
+    app.state.notification_subscribers: list[asyncio.Queue] = []
+    app.state.alert_threshold = 80
+
+    async def _broadcast_notification(notification: dict):
+        for queue in list(app.state.notification_subscribers):
+            try:
+                queue.put_nowait(notification)
+            except asyncio.QueueFull:
+                pass
+
+    async def _check_high_score_alerts(db, job_id: int, score: int, job_title: str, company: str):
+        if score >= app.state.alert_threshold:
+            title = f"High score: {job_title}"
+            message = f"{company} — Score {score}"
+            notif_id = await db.insert_notification(job_id, "high_score", title, message)
+            notif = {"id": notif_id, "job_id": job_id, "type": "high_score", "title": title, "message": message, "read": 0}
+            await _broadcast_notification(notif)
 
     async def _score_unscored(db):
         matcher = app.state.matcher
@@ -139,6 +203,9 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
                         r["job_id"], r["score"], r["reasons"],
                         r["concerns"], r["keywords"],
                     )
+                    job = await db.get_job(r["job_id"])
+                    if job:
+                        await _check_high_score_alerts(db, r["job_id"], r["score"], job["title"], job["company"])
                 scored += len(results)
                 app.state.scoring_progress = {"scored": scored, "total": total, "active": True}
                 logger.info(f"Scored {scored}/{total} jobs")
@@ -157,6 +224,16 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
         else:
             app.state.matcher = None
             app.state.tailor = None
+
+    async def _create_follow_up_reminder(db, job_id: int, days: int = 7):
+        """Auto-create a follow-up reminder N days from now when a job is marked applied."""
+        from datetime import timedelta
+        existing = await db.get_reminders_for_job(job_id)
+        pending = [r for r in existing if r["status"] == "pending"]
+        if not pending:
+            remind_at = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
+            await db.create_reminder(job_id, remind_at, "follow_up")
+            logger.info(f"Created follow-up reminder for job {job_id} in {days} days")
 
     async def _save_parsed_profile(db, profile_data: dict):
         """Save AI-parsed resume data into profile tables, merging with existing."""
@@ -205,7 +282,53 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
 
     @app.get("/api/health")
     async def health():
-        return {"status": "ok"}
+        db: Database = app.state.db
+
+        db_ok = False
+        try:
+            cursor = await db.db.execute("SELECT 1")
+            await cursor.fetchone()
+            db_ok = True
+        except Exception:
+            pass
+
+        scheduler = getattr(app.state, "scheduler", None)
+        if scheduler is not None:
+            scheduler_state = "running" if scheduler.running else "stopped"
+        else:
+            scheduler_state = "not_configured"
+
+        last_scrape = None
+        try:
+            schedules = await db.get_all_scraper_schedules()
+            times = [s["last_scraped_at"] for s in schedules if s.get("last_scraped_at")]
+            if times:
+                last_scrape = max(times)
+        except Exception:
+            pass
+
+        ai_client = getattr(app.state, "ai_client", None)
+
+        start = getattr(app.state, "start_time", None)
+        uptime_seconds = round(_time.monotonic() - start, 1) if start else None
+
+        body = {
+            "status": "healthy" if db_ok else "unhealthy",
+            "db": "ok" if db_ok else "error",
+            "scheduler": scheduler_state,
+            "last_scrape": last_scrape,
+            "ai_provider": ai_client.provider if ai_client else None,
+            "ai_configured": ai_client is not None,
+            "uptime_seconds": uptime_seconds,
+        }
+
+        if not db_ok:
+            return Response(
+                content=json.dumps(body),
+                media_type="application/json",
+                status_code=503,
+            )
+        return body
 
     @app.get("/api/jobs")
     async def list_jobs(
@@ -244,7 +367,8 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
         application = await app.state.db.get_application(job_id)
         events = await app.state.db.get_events(job_id)
         similar = await app.state.db.find_similar_jobs(job["title"], job["company"], exclude_id=job_id)
-        return {**job, "score": score, "sources": sources, "application": application, "events": events, "similar": similar}
+        interview_prep = await app.state.db.get_interview_prep(job_id)
+        return {**job, "score": score, "sources": sources, "application": application, "events": events, "similar": similar, "interview_prep": interview_prep}
 
     @app.post("/api/jobs/{job_id}/dismiss")
     async def dismiss_job(job_id: int):
@@ -448,6 +572,7 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
         apply_url = job.get("apply_url") or job["url"]
         await db.upsert_application(job_id, status="applied")
         await db.add_event(job_id, "applied", "Applied via CareerPulse")
+        await _create_follow_up_reminder(db, job_id)
         return {"url": apply_url, "status": "applied"}
 
     @app.post("/api/jobs/{job_id}/generate-cover-letter")
@@ -506,24 +631,205 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
 
         return {"ok": True}
 
+    @app.post("/api/jobs/{job_id}/interview-prep")
+    async def generate_interview_prep(job_id: int):
+        db = app.state.db
+        client = app.state.ai_client
+        if not client:
+            raise HTTPException(503, "AI client not configured")
+
+        job = await db.get_job(job_id)
+        if not job:
+            raise HTTPException(404, "Job not found")
+
+        score = await db.get_score(job_id)
+        company = await db.get_company(job["company"])
+        work_history = await db.get_work_history()
+        config = await db.get_search_config()
+        resume_text = config["resume_text"] if config else ""
+
+        company_context = ""
+        if company:
+            parts = []
+            if company.get("description"):
+                parts.append(f"About: {company['description']}")
+            if company.get("glassdoor_rating"):
+                parts.append(f"Glassdoor: {company['glassdoor_rating']}")
+            company_context = "\n".join(parts)
+
+        work_context = ""
+        if work_history:
+            entries = []
+            for w in work_history[:5]:
+                entry = f"- {w.get('job_title', '')} at {w.get('company', '')}"
+                if w.get("description"):
+                    entry += f": {w['description'][:200]}"
+                entries.append(entry)
+            work_context = "\n".join(entries)
+
+        match_context = ""
+        if score:
+            reasons = score.get("match_reasons", [])
+            concerns = score.get("concerns", [])
+            if reasons:
+                match_context += "Match strengths: " + "; ".join(reasons) + "\n"
+            if concerns:
+                match_context += "Concerns: " + "; ".join(concerns)
+
+        prompt = f"""You are an interview preparation coach. Generate interview prep materials for this candidate and job.
+
+JOB: {job['title']} at {job['company']}
+DESCRIPTION: {(job.get('description') or '')[:2000]}
+
+{f'COMPANY INFO: {company_context}' if company_context else ''}
+{f'MATCH ANALYSIS: {match_context}' if match_context else ''}
+{f'WORK HISTORY: {work_context}' if work_context else ''}
+{f'RESUME: {resume_text[:1500]}' if resume_text else ''}
+
+Return ONLY valid JSON with this structure:
+{{
+    "behavioral_questions": ["5 likely behavioral questions with brief tips"],
+    "technical_questions": ["5 likely technical questions based on the job requirements"],
+    "star_stories": ["3 STAR-format story outlines the candidate could prepare based on their experience"],
+    "talking_points": ["5 key talking points to emphasize in the interview"]
+}}"""
+
+        from app.ai_client import parse_json_response
+        raw = await client.chat(prompt, max_tokens=2048)
+        prep = parse_json_response(raw)
+
+        await db.save_interview_prep(job_id, prep)
+        await db.add_event(job_id, "interview_prep", "Interview prep generated")
+
+        return {"job_id": job_id, "prep": prep}
+
+    @app.get("/api/jobs/{job_id}/interview-prep")
+    async def get_interview_prep(job_id: int):
+        prep = await app.state.db.get_interview_prep(job_id)
+        if not prep:
+            raise HTTPException(404, "No interview prep found")
+        return {"prep": prep}
+
     @app.post("/api/jobs/{job_id}/application")
     async def update_application(job_id: int, status: str = Query(...), notes: str = Query("")):
-        app_row = await app.state.db.get_application(job_id)
+        db = app.state.db
+        app_row = await db.get_application(job_id)
         if not app_row:
-            await app.state.db.insert_application(job_id, status)
+            await db.insert_application(job_id, status)
         else:
-            await app.state.db.update_application(app_row["id"], status=status, notes=notes)
+            await db.update_application(app_row["id"], status=status, notes=notes)
         if status == "applied":
             now = datetime.now(timezone.utc).isoformat()
-            app_row = await app.state.db.get_application(job_id)
+            app_row = await db.get_application(job_id)
             if app_row and not app_row.get("applied_at"):
-                await app.state.db.update_application(app_row["id"], applied_at=now)
-        await app.state.db.add_event(job_id, "status_change", f"Status changed to {status}")
+                await db.update_application(app_row["id"], applied_at=now)
+            await _create_follow_up_reminder(db, job_id)
+        await db.add_event(job_id, "status_change", f"Status changed to {status}")
+        return {"ok": True}
+
+    @app.get("/api/reminders")
+    async def get_reminders(status: str = Query(None)):
+        reminders = await app.state.db.get_reminders(status=status, include_job=True)
+        return {"reminders": reminders}
+
+    @app.get("/api/reminders/due")
+    async def get_due_reminders():
+        due = await app.state.db.get_due_reminders()
+        return {"reminders": due}
+
+    @app.post("/api/jobs/{job_id}/reminders")
+    async def create_reminder(job_id: int, request: Request):
+        db = app.state.db
+        job = await db.get_job(job_id)
+        if not job:
+            raise HTTPException(404, "Job not found")
+        body = await request.json()
+        remind_at = body.get("remind_at")
+        reminder_type = body.get("type", "follow_up")
+        if not remind_at:
+            raise HTTPException(400, "remind_at is required")
+        rid = await db.create_reminder(job_id, remind_at, reminder_type)
+        return {"ok": True, "reminder_id": rid}
+
+    @app.post("/api/reminders/{reminder_id}/complete")
+    async def complete_reminder(reminder_id: int):
+        await app.state.db.complete_reminder(reminder_id)
+        return {"ok": True}
+
+    @app.post("/api/reminders/{reminder_id}/dismiss")
+    async def dismiss_reminder(reminder_id: int):
+        await app.state.db.dismiss_reminder(reminder_id)
         return {"ok": True}
 
     @app.get("/api/stats")
     async def get_stats():
         return await app.state.db.get_stats()
+
+    @app.get("/api/analytics")
+    async def get_analytics():
+        return await app.state.db.get_analytics()
+
+    @app.get("/api/skill-gaps")
+    async def get_skill_gaps():
+        db = app.state.db
+        gap_data = await db.get_skill_gap_data(min_score=50, max_score=80)
+        user_skills = await db.get_skills()
+        user_skill_names = {s["name"].lower().strip() for s in user_skills if s.get("name")}
+        return {
+            "job_count": gap_data["job_count"],
+            "top_concerns": gap_data["top_concerns"],
+            "top_keywords": gap_data["top_keywords"],
+            "user_skills": [s["name"] for s in user_skills],
+        }
+
+    @app.post("/api/skill-gaps/analyze")
+    async def analyze_skill_gaps():
+        from app.ai_client import parse_json_response
+        db = app.state.db
+        client = getattr(app.state, "ai_client", None)
+        if not client:
+            raise HTTPException(503, "AI client not configured")
+
+        gap_data = await db.get_skill_gap_data(min_score=50, max_score=80)
+        if gap_data["job_count"] == 0:
+            return {"skills": [], "message": "No jobs in the 50-80 score range to analyze"}
+
+        user_skills = await db.get_skills()
+        user_skill_names = [s["name"] for s in user_skills if s.get("name")]
+
+        prompt = f"""You are a career advisor. Analyze the skill gaps between a job seeker's current skills and the jobs they almost qualify for (scored 50-80 out of 100).
+
+CURRENT SKILLS: {', '.join(user_skill_names) if user_skill_names else 'Not specified'}
+
+TOP CONCERNS FROM JOB MATCHES (concern, frequency):
+{chr(10).join(f'- {c}: {n} jobs' for c, n in gap_data['top_concerns'][:15])}
+
+SUGGESTED KEYWORDS/SKILLS FROM JOB MATCHES (keyword, frequency):
+{chr(10).join(f'- {k}: {n} jobs' for k, n in gap_data['top_keywords'][:15])}
+
+TOTAL NEAR-MATCH JOBS: {gap_data['job_count']}
+
+Return ONLY valid JSON with this structure:
+{{
+    "skills": [
+        {{
+            "name": "skill name",
+            "jobs_unlocked": estimated number of additional jobs this would unlock,
+            "difficulty": "low/medium/high" (how hard to learn),
+            "time_estimate": "estimated time to become proficient",
+            "reason": "brief explanation of why this skill matters"
+        }}
+    ]
+}}
+
+Rank by ROI (jobs unlocked relative to learning difficulty). Return top 5 skills."""
+
+        raw = await client.chat(prompt, max_tokens=1024)
+        result = parse_json_response(raw)
+        return {
+            "skills": result.get("skills", []),
+            "job_count": gap_data["job_count"],
+        }
 
     @app.get("/api/pipeline")
     async def get_pipeline():
@@ -536,6 +842,41 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
         db = app.state.db
         jobs = await db.get_pipeline_jobs(status)
         return {"jobs": jobs, "count": len(jobs)}
+
+    # === Notifications ===
+    @app.get("/api/notifications")
+    async def get_notifications(unread: bool = Query(False)):
+        db = app.state.db
+        notifications = await db.get_notifications(unread_only=unread)
+        count = await db.get_unread_notification_count()
+        return {"notifications": notifications, "unread_count": count}
+
+    @app.post("/api/notifications/{notification_id}/read")
+    async def mark_notification_read(notification_id: int):
+        await app.state.db.mark_notification_read(notification_id)
+        return {"ok": True}
+
+    @app.post("/api/notifications/read-all")
+    async def mark_all_read():
+        await app.state.db.mark_all_notifications_read()
+        return {"ok": True}
+
+    @app.get("/api/notifications/stream")
+    async def notification_stream():
+        queue: asyncio.Queue = asyncio.Queue(maxsize=50)
+        app.state.notification_subscribers.append(queue)
+
+        async def event_generator():
+            try:
+                while True:
+                    notif = await queue.get()
+                    yield f"data: {json.dumps(notif)}\n\n"
+            except asyncio.CancelledError:
+                pass
+            finally:
+                app.state.notification_subscribers.remove(queue)
+
+        return StreamingResponse(event_generator(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.get("/api/export/csv")
     async def export_csv(
@@ -589,6 +930,78 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
         from app.digest import generate_digest
         return await generate_digest(app.state.db, min_score, hours)
 
+    @app.post("/api/digest/send-test")
+    async def send_digest_test():
+        from app.digest import send_digest
+        success = await send_digest(app.state.db)
+        if not success:
+            raise HTTPException(400, "Digest not sent — check email settings and digest configuration")
+        return {"ok": True, "message": "Digest sent"}
+
+    @app.get("/api/settings/email")
+    async def get_email_settings():
+        settings = await app.state.db.get_email_settings()
+        if settings:
+            settings.pop("smtp_password", None)
+        return settings or {}
+
+    @app.post("/api/settings/email")
+    async def save_email_settings(request: Request):
+        data = await request.json()
+        existing = await app.state.db.get_email_settings()
+        if data.get("smtp_password") == "" and existing:
+            data["smtp_password"] = existing.get("smtp_password", "")
+        await app.state.db.update_email_settings(data)
+
+        # Update digest scheduler job time if changed
+        scheduler = getattr(app.state, "scheduler", None)
+        if scheduler and scheduler.running:
+            digest_time = data.get("digest_time", "08:00")
+            try:
+                hour, minute = digest_time.split(":")
+                scheduler.reschedule_job("digest_cycle", trigger="cron", hour=int(hour), minute=int(minute))
+            except Exception:
+                pass
+
+        return {"ok": True}
+
+    @app.post("/api/settings/email/test")
+    async def test_email_settings(request: Request):
+        from app.emailer import send_email
+        data = await request.json()
+        existing = await app.state.db.get_email_settings()
+        if data.get("smtp_password") == "" and existing:
+            data["smtp_password"] = existing.get("smtp_password", "")
+        test_to = data.get("from_address", "")
+        if not test_to:
+            raise HTTPException(400, "From address required for test")
+        success = await send_email(
+            data,
+            to=test_to,
+            subject="CareerPulse SMTP Test",
+            body_text="Your SMTP settings are configured correctly.",
+            body_html="<p>Your SMTP settings are configured correctly.</p>",
+        )
+        if not success:
+            raise HTTPException(500, "Failed to send test email — check SMTP settings")
+        return {"ok": True, "message": f"Test email sent to {test_to}"}
+
+    @app.post("/api/jobs/{job_id}/send-email")
+    async def send_job_email(job_id: int):
+        from app.emailer import send_application_email
+        email_settings = await app.state.db.get_email_settings()
+        if not email_settings or not email_settings.get("smtp_host"):
+            raise HTTPException(400, "SMTP not configured")
+        application = await app.state.db.get_application(job_id)
+        if not application or not application.get("email_draft"):
+            raise HTTPException(400, "No email draft for this job")
+        email_draft = json.loads(application["email_draft"])
+        success = await send_application_email(email_settings, email_draft)
+        if not success:
+            raise HTTPException(500, "Failed to send email")
+        await app.state.db.add_event(job_id, "email_sent", f"Email sent to {email_draft.get('to', '')}")
+        return {"ok": True, "message": "Email sent"}
+
     @app.post("/api/clear-jobs")
     async def clear_jobs():
         await app.state.db.clear_jobs()
@@ -606,7 +1019,7 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
         async def _scrape_and_score():
             try:
                 from app.scrapers import ALL_SCRAPERS
-                from app.scheduler import run_scrape_cycle
+                from app.scheduler import run_scrape_cycle, run_enrichment_cycle
 
                 db = app.state.db
                 config = await db.get_search_config()
@@ -616,6 +1029,7 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
                 app.state.scrape_progress = {"completed": 0, "total": len(scrapers), "current": None, "new_jobs": 0, "active": True}
                 await run_scrape_cycle(db, scrapers, search_terms=terms, progress=app.state.scrape_progress, scraper_keys=keys)
 
+                await run_enrichment_cycle(db)
                 await _score_unscored(db)
             except Exception:
                 logger.exception("Background scrape+score failed")
@@ -634,18 +1048,9 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
 
     @app.post("/api/jobs/enrich")
     async def enrich_jobs():
-        from app.enrichment import enrich_job_description
-        db = app.state.db
-        jobs = await db.get_jobs_needing_enrichment(limit=50)
-        enriched = 0
-        for job in jobs:
-            sources = await db.get_sources(job["id"])
-            source = sources[0]["source_name"] if sources else "unknown"
-            desc = await enrich_job_description(job["url"], source)
-            if desc and len(desc) > len(job.get("description") or ""):
-                await db.update_job_description(job["id"], desc)
-                enriched += 1
-        return {"enriched": enriched, "total": len(jobs)}
+        from app.scheduler import run_enrichment_cycle
+        enriched = await run_enrichment_cycle(app.state.db, limit=50)
+        return {"enriched": enriched}
 
     @app.post("/api/score")
     async def trigger_score():

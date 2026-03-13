@@ -34,6 +34,18 @@ const api = {
         return this.request('POST', `/api/jobs/${id}/dismiss`);
     },
 
+    getNotifications(unread = false) {
+        return this.request('GET', `/api/notifications?unread=${unread}`);
+    },
+
+    markNotificationRead(id) {
+        return this.request('POST', `/api/notifications/${id}/read`);
+    },
+
+    markAllNotificationsRead() {
+        return this.request('POST', '/api/notifications/read-all');
+    },
+
     prepareApplication(id) {
         return this.request('POST', `/api/jobs/${id}/prepare`);
     },
@@ -230,17 +242,99 @@ async function handleRoute() {
     }
 }
 
+// === Filter Persistence & Smart Views ===
+const FILTER_IDS = ['filter-search', 'filter-score', 'filter-sort', 'filter-work-type', 'filter-employment', 'filter-location', 'filter-region', 'filter-posted-within', 'filter-clearance'];
+const FILTER_STORAGE_KEY = 'careerpulse_filters';
+const SMART_VIEWS_KEY = 'careerpulse_saved_views';
+
+function getFilterState() {
+    const state = {};
+    FILTER_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) state[id] = el.value;
+    });
+    return state;
+}
+
+function applyFilterState(state) {
+    FILTER_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (el && state[id] !== undefined) el.value = state[id];
+    });
+}
+
+function saveFilterState() {
+    try { localStorage.setItem(FILTER_STORAGE_KEY, JSON.stringify(getFilterState())); } catch {}
+}
+
+function loadSavedFilterState() {
+    try {
+        const raw = localStorage.getItem(FILTER_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+}
+
+function getSmartViews() {
+    try {
+        const raw = localStorage.getItem(SMART_VIEWS_KEY);
+        return raw ? JSON.parse(raw) : [];
+    } catch { return []; }
+}
+
+function saveSmartViews(views) {
+    try { localStorage.setItem(SMART_VIEWS_KEY, JSON.stringify(views)); } catch {}
+}
+
+function renderSmartViewChips(reloadFn) {
+    const container = document.getElementById('smart-views');
+    if (!container) return;
+    const views = getSmartViews();
+    container.innerHTML = views.map((v, i) => `
+        <button class="smart-view-chip" data-index="${i}" title="Apply: ${v.name}">
+            ${v.name}
+            <span class="smart-view-delete" data-index="${i}">&times;</span>
+        </button>
+    `).join('');
+
+    container.querySelectorAll('.smart-view-chip').forEach(chip => {
+        chip.addEventListener('click', (e) => {
+            if (e.target.classList.contains('smart-view-delete')) return;
+            const idx = parseInt(chip.dataset.index);
+            const view = getSmartViews()[idx];
+            if (view) {
+                applyFilterState(view.filters);
+                saveFilterState();
+                container.querySelectorAll('.smart-view-chip').forEach(c => c.classList.remove('smart-view-chip-active'));
+                chip.classList.add('smart-view-chip-active');
+                reloadFn();
+            }
+        });
+    });
+
+    container.querySelectorAll('.smart-view-delete').forEach(btn => {
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const idx = parseInt(btn.dataset.index);
+            const views = getSmartViews();
+            views.splice(idx, 1);
+            saveSmartViews(views);
+            renderSmartViewChips(reloadFn);
+        });
+    });
+}
+
 // === Feed View ===
 async function renderFeed(container) {
     focusedJobIndex = -1;
     currentOffset = 0;
     container.innerHTML = `
+        <div id="smart-views" class="smart-views-bar"></div>
         <div class="filter-bar">
             <input type="text" class="search-input" id="filter-search" placeholder="Search jobs...">
             <select class="filter-select" id="filter-score">
                 <option value="">All scores</option>
                 <option value="40">40+</option>
-                <option value="60" selected>60+</option>
+                <option value="60">60+</option>
                 <option value="80">80+</option>
             </select>
             <select class="filter-select" id="filter-sort">
@@ -283,6 +377,7 @@ async function renderFeed(container) {
                 <option value="hide">Hide clearance/visa required</option>
                 <option value="only">Only clearance/visa required</option>
             </select>
+            <button class="btn btn-secondary btn-sm" id="save-view-btn" style="white-space:nowrap">Save View</button>
             <button class="btn btn-secondary btn-sm" id="select-mode-btn" style="white-space:nowrap">Select</button>
         </div>
         <div id="batch-bar" style="display:none;position:sticky;top:0;z-index:50;background:var(--bg-surface);border:1px solid var(--border);border-radius:8px;padding:10px 16px;margin-bottom:12px;display:none;align-items:center;gap:12px;box-shadow:0 2px 8px rgba(0,0,0,0.15)">
@@ -309,9 +404,18 @@ async function renderFeed(container) {
     const postedWithinSelect = document.getElementById('filter-posted-within');
     const loadMoreBtn = document.getElementById('load-more-btn');
 
+    // Restore saved filter state (or apply defaults)
+    const savedState = loadSavedFilterState();
+    if (savedState) {
+        applyFilterState(savedState);
+    } else {
+        scoreSelect.value = '60';
+    }
+
     let debounceTimer;
     const reload = () => {
         currentOffset = 0;
+        saveFilterState();
         loadJobs(false);
     };
 
@@ -330,6 +434,25 @@ async function renderFeed(container) {
     regionSelect.addEventListener('change', reload);
     clearanceSelect.addEventListener('change', reload);
     postedWithinSelect.addEventListener('change', reload);
+
+    // Smart views
+    renderSmartViewChips(reload);
+
+    // Save View button
+    document.getElementById('save-view-btn').addEventListener('click', () => {
+        const name = prompt('Name for this saved view:');
+        if (!name || !name.trim()) return;
+        const views = getSmartViews();
+        const existing = views.findIndex(v => v.name === name.trim());
+        if (existing >= 0) {
+            views[existing].filters = getFilterState();
+        } else {
+            views.push({ name: name.trim(), filters: getFilterState() });
+        }
+        saveSmartViews(views);
+        renderSmartViewChips(reload);
+        showToast(`Saved view "${name.trim()}"`, 'success');
+    });
     loadMoreBtn.addEventListener('click', () => loadJobs(true));
 
     // Select mode
@@ -792,6 +915,14 @@ function renderJobDetailContent(container, job, profile = {}, companyInfo = null
                 <div id="email-container">
                     ${application?.email_draft ? renderEmailPreview(JSON.parse(application.email_draft)) : ''}
                 </div>
+                <div id="interview-prep-container">
+                    ${job.interview_prep ? renderInterviewPrep(job.interview_prep) : (appStatus === 'interviewing' ? `
+                    <div class="card sidebar-section">
+                        <h3>Interview Prep</h3>
+                        <button class="btn btn-primary" id="generate-interview-prep-btn" style="width:100%">Generate Interview Prep</button>
+                    </div>
+                    ` : '')}
+                </div>
             </div>
         </div>
     `;
@@ -957,6 +1088,7 @@ function renderJobDetailContent(container, job, profile = {}, companyInfo = null
             try {
                 const result = await api.draftEmail(job.id);
                 document.getElementById('email-container').innerHTML = renderEmailPreview(result.email);
+                wireSendEmailBtn(job.id);
                 showToast('Email drafted', 'success');
             } catch (err) {
                 showToast(err.message, 'error');
@@ -966,6 +1098,8 @@ function renderJobDetailContent(container, job, profile = {}, companyInfo = null
             }
         });
     }
+
+    wireSendEmailBtn(job.id);
 
     const genCoverLetterBtn = document.getElementById('generate-cover-letter-btn');
     if (genCoverLetterBtn) {
@@ -1029,6 +1163,47 @@ function renderJobDetailContent(container, job, profile = {}, companyInfo = null
             await renderJobDetail(container, job.id);
         });
     }
+
+    const genPrepBtn = document.getElementById('generate-interview-prep-btn');
+    if (genPrepBtn) {
+        genPrepBtn.addEventListener('click', async () => {
+            genPrepBtn.disabled = true;
+            genPrepBtn.innerHTML = '<span class="spinner"></span> Generating...';
+            try {
+                const result = await api.request('POST', `/api/jobs/${job.id}/interview-prep`);
+                document.getElementById('interview-prep-container').innerHTML = renderInterviewPrep(result.prep);
+                showToast('Interview prep generated', 'success');
+            } catch (err) {
+                showToast(err.message, 'error');
+                genPrepBtn.disabled = false;
+                genPrepBtn.textContent = 'Generate Interview Prep';
+            }
+        });
+    }
+}
+
+function renderInterviewPrep(prep) {
+    const section = (title, items) => {
+        if (!items || items.length === 0) return '';
+        return `
+            <details open style="margin-bottom:12px">
+                <summary style="cursor:pointer;font-weight:600;font-size:0.875rem;margin-bottom:6px">${title}</summary>
+                <ul style="margin:0;padding-left:20px;display:flex;flex-direction:column;gap:4px">
+                    ${items.map(item => `<li style="font-size:0.8125rem;color:var(--text-secondary);line-height:1.5">${escapeHtml(item)}</li>`).join('')}
+                </ul>
+            </details>
+        `;
+    };
+    return `
+        <div class="card sidebar-section">
+            <h3>Interview Prep</h3>
+            ${section('Behavioral Questions', prep.behavioral_questions)}
+            ${section('Technical Questions', prep.technical_questions)}
+            ${section('STAR Stories', prep.star_stories)}
+            ${section('Talking Points', prep.talking_points)}
+            <button class="btn btn-secondary btn-sm" id="generate-interview-prep-btn" style="width:100%;margin-top:8px">Regenerate</button>
+        </div>
+    `;
 }
 
 function renderTimeline(events) {
@@ -1165,6 +1340,24 @@ function attachCoverLetterListeners(jobId) {
     }
 }
 
+function wireSendEmailBtn(jobId) {
+    const sendBtn = document.getElementById('send-email-btn');
+    if (!sendBtn) return;
+    sendBtn.addEventListener('click', async () => {
+        sendBtn.disabled = true;
+        sendBtn.innerHTML = '<span class="spinner"></span> Sending...';
+        try {
+            await api.request('POST', `/api/jobs/${jobId}/send-email`);
+            showToast('Email sent', 'success');
+            sendBtn.textContent = 'Sent!';
+        } catch (err) {
+            showToast(err.message, 'error');
+            sendBtn.disabled = false;
+            sendBtn.textContent = 'Send Email';
+        }
+    });
+}
+
 function renderEmailPreview(email) {
     if (!email) return '';
     return `
@@ -1176,6 +1369,7 @@ function renderEmailPreview(email) {
                 <div class="email-body">${escapeHtml(email.body || '')}</div>
             </div>
             <div class="prepared-actions">
+                <button class="btn btn-primary btn-sm" id="send-email-btn">Send Email</button>
                 <button class="btn btn-secondary btn-sm" onclick="copyToClipboard(document.querySelector('.email-body')?.textContent || '')">Copy Email</button>
             </div>
         </div>
@@ -1206,14 +1400,14 @@ async function renderPipeline(container) {
             <h1 style="font-size:1.5rem;font-weight:700;letter-spacing:-0.02em;margin-bottom:24px">Pipeline</h1>
             <div class="pipeline-board">
                 ${statuses.map((status, i) => `
-                    <div class="pipeline-column">
+                    <div class="pipeline-column" data-status="${status}">
                         <div class="pipeline-column-header" style="border-top: 3px solid ${statusColors[status]}">
                             <span>${statusLabels[status]}</span>
                             <span class="pipeline-count">${results[i].count}</span>
                         </div>
-                        <div class="pipeline-cards">
+                        <div class="pipeline-cards" data-status="${status}">
                             ${results[i].jobs.map(job => `
-                                <div class="card pipeline-card" onclick="navigate('#/job/${job.id}')">
+                                <div class="card pipeline-card" draggable="true" data-job-id="${job.id}" data-status="${status}">
                                     <div class="pipeline-card-title">${escapeHtml(job.title)}</div>
                                     <div class="pipeline-card-company">${escapeHtml(job.company)}</div>
                                     ${job.match_score ? `<span class="score-badge ${getScoreClass(job.match_score)}" style="font-size:0.7rem">${job.match_score}</span>` : ''}
@@ -1224,9 +1418,246 @@ async function renderPipeline(container) {
                 `).join('')}
             </div>
         `;
+
+        // Drag-and-drop handlers
+        let draggedCard = null;
+
+        container.querySelectorAll('.pipeline-card[draggable]').forEach(card => {
+            card.addEventListener('dragstart', (e) => {
+                draggedCard = card;
+                card.classList.add('pipeline-card-dragging');
+                e.dataTransfer.effectAllowed = 'move';
+                e.dataTransfer.setData('text/plain', card.dataset.jobId);
+            });
+
+            card.addEventListener('dragend', () => {
+                card.classList.remove('pipeline-card-dragging');
+                draggedCard = null;
+                container.querySelectorAll('.pipeline-cards').forEach(zone => {
+                    zone.classList.remove('pipeline-drop-target');
+                });
+            });
+
+            card.addEventListener('click', () => {
+                navigate(`#/job/${card.dataset.jobId}`);
+            });
+        });
+
+        container.querySelectorAll('.pipeline-cards').forEach(dropZone => {
+            dropZone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = 'move';
+                dropZone.classList.add('pipeline-drop-target');
+            });
+
+            dropZone.addEventListener('dragleave', (e) => {
+                if (!dropZone.contains(e.relatedTarget)) {
+                    dropZone.classList.remove('pipeline-drop-target');
+                }
+            });
+
+            dropZone.addEventListener('drop', async (e) => {
+                e.preventDefault();
+                dropZone.classList.remove('pipeline-drop-target');
+                if (!draggedCard) return;
+
+                const jobId = draggedCard.dataset.jobId;
+                const oldStatus = draggedCard.dataset.status;
+                const newStatus = dropZone.dataset.status;
+                if (oldStatus === newStatus) return;
+
+                // Optimistic move
+                dropZone.appendChild(draggedCard);
+                draggedCard.dataset.status = newStatus;
+
+                // Update column counts
+                const oldCol = container.querySelector(`.pipeline-column[data-status="${oldStatus}"] .pipeline-count`);
+                const newCol = container.querySelector(`.pipeline-column[data-status="${newStatus}"] .pipeline-count`);
+                if (oldCol) oldCol.textContent = parseInt(oldCol.textContent) - 1;
+                if (newCol) newCol.textContent = parseInt(newCol.textContent) + 1;
+
+                try {
+                    await api.updateApplication(jobId, newStatus);
+                    showToast(`Moved to ${statusLabels[newStatus]}`, 'success');
+                } catch (err) {
+                    showToast(`Failed to move: ${err.message}`, 'error');
+                    await renderPipeline(container);
+                }
+            });
+        });
     } catch (err) {
         container.innerHTML = `<div class="empty-state"><div class="empty-state-title">Failed to load pipeline</div><div class="empty-state-desc">${escapeHtml(err.message)}</div></div>`;
     }
+}
+
+// === Triage Mode ===
+let triageActive = false;
+let triageJobs = [];
+let triageIndex = 0;
+let triageUndoStack = [];
+
+async function enterTriageMode() {
+    if (triageActive) return;
+    triageActive = true;
+    triageUndoStack = [];
+
+    const savedState = loadSavedFilterState();
+    const params = {
+        limit: 200,
+        offset: 0,
+        min_score: savedState?.['filter-score'] || '',
+        sort: 'score',
+        search: savedState?.['filter-search'] || '',
+        work_type: savedState?.['filter-work-type'] || '',
+        employment_type: savedState?.['filter-employment'] || '',
+        location: savedState?.['filter-location'] || '',
+        region: savedState?.['filter-region'] || '',
+        clearance: savedState?.['filter-clearance'] || '',
+        posted_within: savedState?.['filter-posted-within'] || '',
+    };
+
+    try {
+        const data = await api.getJobs(params);
+        triageJobs = (data.jobs || []).filter(j => !j.app_status);
+        triageIndex = 0;
+        if (triageJobs.length === 0) {
+            showToast('No jobs to triage', 'info');
+            triageActive = false;
+            return;
+        }
+        renderTriageCard();
+    } catch (err) {
+        showToast(`Failed to load triage: ${err.message}`, 'error');
+        triageActive = false;
+    }
+}
+
+function exitTriageMode() {
+    triageActive = false;
+    triageJobs = [];
+    triageIndex = 0;
+    triageUndoStack = [];
+    handleRoute();
+}
+
+function renderTriageCard() {
+    const container = document.getElementById('app');
+    if (triageIndex >= triageJobs.length) {
+        container.innerHTML = `
+            <div class="triage-container">
+                <div class="triage-done">
+                    <div class="empty-state-icon">&#9989;</div>
+                    <div class="empty-state-title">Triage complete!</div>
+                    <div class="empty-state-desc">You reviewed ${triageJobs.length} jobs.</div>
+                    <button class="btn btn-primary" style="margin-top:16px" onclick="exitTriageMode()">Back to Feed</button>
+                </div>
+            </div>
+        `;
+        return;
+    }
+
+    const job = triageJobs[triageIndex];
+    const score = job.match_score;
+    const reasons = job.match_reasons ? JSON.parse(job.match_reasons) : [];
+    const concerns = job.concerns ? JSON.parse(job.concerns) : [];
+    const salary = formatSalary(job.salary_min, job.salary_max, job.salary_estimate_min, job.salary_estimate_max);
+
+    container.innerHTML = `
+        <div class="triage-container">
+            <div class="triage-header">
+                <span class="triage-progress">${triageIndex + 1} of ${triageJobs.length}</span>
+                <div class="triage-progress-bar">
+                    <div class="triage-progress-fill" style="width:${((triageIndex + 1) / triageJobs.length) * 100}%"></div>
+                </div>
+                <button class="btn btn-ghost btn-sm" onclick="exitTriageMode()">Exit Triage</button>
+            </div>
+            <div class="triage-card card">
+                <div class="triage-card-body">
+                    <div class="triage-score-row">
+                        ${score != null ? `<span class="score-badge score-large ${getScoreClass(score)}">${score}</span>` : '<span class="score-badge score-large score-badge-none">--</span>'}
+                        <div>
+                            <div class="triage-title">${escapeHtml(job.title)}</div>
+                            <div class="triage-company">${escapeHtml(job.company)}${job.location ? ` &mdash; ${escapeHtml(job.location)}` : ''}</div>
+                        </div>
+                    </div>
+                    ${salary ? `<div class="triage-salary">${salary}</div>` : ''}
+                    ${reasons.length ? `
+                        <div class="triage-section">
+                            <div class="triage-section-label">Match Reasons</div>
+                            <ul class="score-reasons">${reasons.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul>
+                        </div>
+                    ` : ''}
+                    ${concerns.length ? `
+                        <div class="triage-section">
+                            <div class="triage-section-label">Concerns</div>
+                            <ul class="score-concerns">${concerns.map(c => `<li>${escapeHtml(c)}</li>`).join('')}</ul>
+                        </div>
+                    ` : ''}
+                    <div class="triage-actions">
+                        <button class="btn btn-primary" id="triage-keep-btn">Keep &amp; Prepare &rarr;</button>
+                        <button class="btn btn-secondary" id="triage-skip-btn">Skip &rarr;</button>
+                        <button class="btn btn-danger" id="triage-dismiss-btn">Dismiss</button>
+                        <button class="btn btn-ghost" id="triage-view-btn">View Details</button>
+                        ${triageUndoStack.length ? '<button class="btn btn-ghost" id="triage-undo-btn">Undo</button>' : ''}
+                    </div>
+                    <div class="triage-shortcuts-hint">
+                        <kbd>&rarr;</kbd> Keep &nbsp; <kbd>&larr;</kbd> Dismiss &nbsp; <kbd>&darr;</kbd> Skip &nbsp; <kbd>Enter</kbd> View &nbsp; <kbd>z</kbd> Undo &nbsp; <kbd>Esc</kbd> Exit
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+
+    document.getElementById('triage-keep-btn').addEventListener('click', triageKeep);
+    document.getElementById('triage-skip-btn').addEventListener('click', triageSkip);
+    document.getElementById('triage-dismiss-btn').addEventListener('click', triageDismiss);
+    document.getElementById('triage-view-btn').addEventListener('click', () => navigate(`#/job/${job.id}`));
+    const undoBtn = document.getElementById('triage-undo-btn');
+    if (undoBtn) undoBtn.addEventListener('click', triageUndo);
+}
+
+function formatSalary(min, max, estMin, estMax) {
+    const lo = min || estMin;
+    const hi = max || estMax;
+    if (!lo && !hi) return '';
+    const fmt = (n) => '$' + (n / 1000).toFixed(0) + 'k';
+    if (lo && hi) return `${fmt(lo)} - ${fmt(hi)}`;
+    if (lo) return `${fmt(lo)}+`;
+    return `Up to ${fmt(hi)}`;
+}
+
+async function triageKeep() {
+    const job = triageJobs[triageIndex];
+    triageUndoStack.push({ index: triageIndex, action: 'keep', jobId: job.id });
+    try {
+        await api.prepareApplication(job.id);
+    } catch {}
+    triageIndex++;
+    renderTriageCard();
+}
+
+function triageSkip() {
+    triageUndoStack.push({ index: triageIndex, action: 'skip' });
+    triageIndex++;
+    renderTriageCard();
+}
+
+async function triageDismiss() {
+    const job = triageJobs[triageIndex];
+    triageUndoStack.push({ index: triageIndex, action: 'dismiss', jobId: job.id });
+    try {
+        await api.dismissJob(job.id);
+    } catch {}
+    triageIndex++;
+    renderTriageCard();
+}
+
+async function triageUndo() {
+    if (!triageUndoStack.length) return;
+    const last = triageUndoStack.pop();
+    triageIndex = last.index;
+    // No API undo for dismiss/keep — the card just goes back in view
+    renderTriageCard();
 }
 
 // === Stats Dashboard View ===
@@ -1289,6 +1720,32 @@ async function renderStats(container) {
                     <button class="btn btn-secondary btn-sm" id="copy-digest-btn">Copy to Clipboard</button>
                 </div>
                 <div id="digest-container">
+                    <div class="loading-container"><span class="spinner"></span></div>
+                </div>
+            </div>
+            <div class="card" style="padding:24px;margin-top:24px">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+                    <h2 style="font-size:1.125rem;font-weight:600;margin:0">Follow-Up Reminders</h2>
+                </div>
+                <div id="reminders-container">
+                    <div class="loading-container"><span class="spinner"></span></div>
+                </div>
+            </div>
+            <div class="card" style="padding:24px;margin-top:24px">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+                    <h2 style="font-size:1.125rem;font-weight:600;margin:0">Skill Gap Analysis</h2>
+                    <button class="btn btn-primary btn-sm" id="analyze-skills-btn">Analyze with AI</button>
+                </div>
+                <p style="color:var(--text-secondary);font-size:0.875rem;margin-bottom:12px">Skills that would unlock more job matches (from jobs scoring 50-80).</p>
+                <div id="skill-gaps-container">
+                    <div class="loading-container"><span class="spinner"></span></div>
+                </div>
+            </div>
+            <div class="card" style="padding:24px;margin-top:24px">
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+                    <h2 style="font-size:1.125rem;font-weight:600;margin:0">Application Analytics</h2>
+                </div>
+                <div id="analytics-container">
                     <div class="loading-container"><span class="spinner"></span></div>
                 </div>
             </div>
@@ -1387,6 +1844,200 @@ async function renderStats(container) {
         } catch (err) {
             document.getElementById('digest-container').innerHTML = '<div style="font-size:0.8125rem;color:var(--text-tertiary)">Could not load digest.</div>';
         }
+
+        // Fetch reminders
+        try {
+            const reminderData = await api.request('GET', '/api/reminders/due');
+            const allReminders = await api.request('GET', '/api/reminders?status=pending');
+            const due = reminderData.reminders || [];
+            const upcoming = (allReminders.reminders || []).filter(r => !due.find(d => d.id === r.id));
+            const remindersContainer = document.getElementById('reminders-container');
+            if (due.length === 0 && upcoming.length === 0) {
+                remindersContainer.innerHTML = '<div style="font-size:0.875rem;color:var(--text-tertiary)">No pending follow-up reminders.</div>';
+            } else {
+                const renderReminder = (r, isDue) => `
+                    <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 12px;background:${isDue ? 'var(--score-red-bg, #fef2f2)' : 'var(--bg-surface-secondary)'};border-radius:var(--radius-sm);border-left:3px solid ${isDue ? 'var(--danger, #ef4444)' : 'var(--accent)'}">
+                        <div>
+                            <a href="#/job/${r.job_id}" style="font-size:0.875rem;font-weight:500;color:var(--text-primary);text-decoration:none">${escapeHtml(r.title || 'Unknown')}</a>
+                            <div style="font-size:0.75rem;color:var(--text-tertiary)">${escapeHtml(r.company || '')} &middot; ${isDue ? 'Overdue' : formatDate(r.remind_at)}</div>
+                        </div>
+                        <div style="display:flex;gap:6px">
+                            <button class="btn btn-sm" onclick="completeReminder(${r.id})" style="font-size:0.75rem;padding:4px 8px">Done</button>
+                            <button class="btn btn-sm btn-secondary" onclick="dismissReminder(${r.id})" style="font-size:0.75rem;padding:4px 8px">Dismiss</button>
+                        </div>
+                    </div>
+                `;
+                remindersContainer.innerHTML = `
+                    ${due.length > 0 ? `<div style="font-size:0.8125rem;font-weight:600;color:var(--danger, #ef4444);margin-bottom:6px">${due.length} overdue</div>` : ''}
+                    <div style="display:flex;flex-direction:column;gap:6px">
+                        ${due.map(r => renderReminder(r, true)).join('')}
+                        ${upcoming.slice(0, 5).map(r => renderReminder(r, false)).join('')}
+                    </div>
+                `;
+            }
+        } catch {
+            document.getElementById('reminders-container').innerHTML = '<div style="font-size:0.8125rem;color:var(--text-tertiary)">Could not load reminders.</div>';
+        }
+
+        // Fetch skill gap data
+        try {
+            const gapData = await api.request('GET', '/api/skill-gaps');
+            const gapsContainer = document.getElementById('skill-gaps-container');
+            if (gapData.job_count === 0) {
+                gapsContainer.innerHTML = '<div style="font-size:0.875rem;color:var(--text-tertiary)">No near-match jobs to analyze yet. Score some jobs first.</div>';
+            } else {
+                const keywords = (gapData.top_keywords || []).slice(0, 8);
+                const concerns = (gapData.top_concerns || []).slice(0, 5);
+                gapsContainer.innerHTML = `
+                    <div style="font-size:0.875rem;color:var(--text-secondary);margin-bottom:12px">${gapData.job_count} jobs in the 50-80 score range</div>
+                    ${keywords.length > 0 ? `
+                        <div style="margin-bottom:12px">
+                            <div style="font-size:0.8125rem;font-weight:600;color:var(--text-tertiary);margin-bottom:6px">Most requested skills you're missing:</div>
+                            <div style="display:flex;flex-wrap:wrap;gap:6px">
+                                ${keywords.map(([k, n]) => `<span style="display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:var(--accent-surface, #eff6ff);color:var(--accent);border-radius:999px;font-size:0.8125rem;font-weight:500">${escapeHtml(k)} <span style="color:var(--text-tertiary);font-size:0.75rem">${n}</span></span>`).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                    ${concerns.length > 0 ? `
+                        <div>
+                            <div style="font-size:0.8125rem;font-weight:600;color:var(--text-tertiary);margin-bottom:6px">Common concerns:</div>
+                            <div style="display:flex;flex-direction:column;gap:4px">
+                                ${concerns.map(([c, n]) => `<div style="font-size:0.8125rem;color:var(--text-secondary)">&bull; ${escapeHtml(c)} <span style="color:var(--text-tertiary)">(${n})</span></div>`).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                    <div id="ai-skill-analysis" style="margin-top:16px"></div>
+                `;
+            }
+        } catch {
+            document.getElementById('skill-gaps-container').innerHTML = '<div style="font-size:0.8125rem;color:var(--text-tertiary)">Could not load skill gaps.</div>';
+        }
+
+        // Analyze skills with AI button
+        document.getElementById('analyze-skills-btn')?.addEventListener('click', async () => {
+            const btn = document.getElementById('analyze-skills-btn');
+            const resultDiv = document.getElementById('ai-skill-analysis');
+            if (!resultDiv) return;
+            btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Analyzing...';
+            try {
+                const result = await api.request('POST', '/api/skill-gaps/analyze');
+                if (!result.skills || result.skills.length === 0) {
+                    resultDiv.innerHTML = '<div style="font-size:0.875rem;color:var(--text-tertiary)">No skill recommendations available.</div>';
+                } else {
+                    resultDiv.innerHTML = `
+                        <div style="font-size:0.8125rem;font-weight:600;color:var(--text-tertiary);margin-bottom:8px">AI Recommended Skills (by ROI):</div>
+                        <div style="display:flex;flex-direction:column;gap:8px">
+                            ${result.skills.map((s, i) => `
+                                <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;background:var(--bg-surface-secondary);border-radius:var(--radius-sm);border-left:3px solid var(--accent)">
+                                    <div style="font-size:1.25rem;font-weight:700;color:var(--accent);min-width:24px">${i + 1}</div>
+                                    <div style="flex:1">
+                                        <div style="font-weight:600;font-size:0.875rem">${escapeHtml(s.name)}</div>
+                                        <div style="font-size:0.8125rem;color:var(--text-secondary);margin-top:2px">${escapeHtml(s.reason)}</div>
+                                        <div style="display:flex;gap:12px;margin-top:4px;font-size:0.75rem;color:var(--text-tertiary)">
+                                            <span>~${s.jobs_unlocked} jobs</span>
+                                            <span>Difficulty: ${escapeHtml(s.difficulty)}</span>
+                                            <span>${escapeHtml(s.time_estimate)}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    `;
+                }
+            } catch (err) {
+                resultDiv.innerHTML = `<div style="color:var(--danger, #ef4444);font-size:0.875rem">${escapeHtml(err.message)}</div>`;
+            }
+            finally { btn.disabled = false; btn.textContent = 'Analyze with AI'; }
+        });
+
+        // Fetch analytics
+        try {
+            const analytics = await api.request('GET', '/api/analytics');
+            const analyticsContainer = document.getElementById('analytics-container');
+            const funnelEntries = Object.entries(analytics.funnel || {});
+            const hasAnyFunnel = funnelEntries.some(([, v]) => v > 0);
+            const maxFunnel = Math.max(...funnelEntries.map(([, v]) => v), 1);
+            const calibration = analytics.score_calibration || {};
+            const sources = analytics.sources || [];
+            const maxSourceJobs = Math.max(...sources.map(s => s.jobs), 1);
+            const velocity = analytics.weekly_velocity || [];
+            const maxVelocity = Math.max(...velocity.map(v => v.count), 1);
+
+            if (!hasAnyFunnel && sources.length === 0 && velocity.length === 0) {
+                analyticsContainer.innerHTML = '<div style="font-size:0.875rem;color:var(--text-tertiary)">No application data yet. Start applying to jobs to see analytics.</div>';
+            } else {
+                const statusColors = {
+                    interested: 'var(--accent, #3b82f6)',
+                    prepared: '#8b5cf6',
+                    applied: '#10b981',
+                    interviewing: '#f59e0b',
+                    offered: '#22c55e',
+                    rejected: 'var(--danger, #ef4444)',
+                };
+                analyticsContainer.innerHTML = `
+                    ${hasAnyFunnel ? `
+                        <div style="margin-bottom:24px">
+                            <div style="font-size:0.8125rem;font-weight:600;color:var(--text-tertiary);margin-bottom:8px">Application Funnel</div>
+                            <div style="display:flex;flex-direction:column;gap:6px">
+                                ${funnelEntries.map(([status, count]) => `
+                                    <div style="display:flex;align-items:center;gap:8px">
+                                        <div style="width:90px;font-size:0.8125rem;color:var(--text-secondary);text-transform:capitalize">${status}</div>
+                                        <div style="flex:1;height:20px;background:var(--bg-surface-secondary);border-radius:var(--radius-sm);overflow:hidden">
+                                            <div style="height:100%;width:${Math.round((count / maxFunnel) * 100)}%;background:${statusColors[status] || 'var(--accent)'};border-radius:var(--radius-sm);transition:width 0.3s"></div>
+                                        </div>
+                                        <div style="width:30px;text-align:right;font-size:0.8125rem;font-weight:600;color:var(--text-primary)">${count}</div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                    ${Object.values(calibration).some(v => v !== null) ? `
+                        <div style="margin-bottom:24px">
+                            <div style="font-size:0.8125rem;font-weight:600;color:var(--text-tertiary);margin-bottom:8px">Score Calibration (avg match score by status)</div>
+                            <div style="display:flex;gap:12px;flex-wrap:wrap">
+                                ${Object.entries(calibration).filter(([, v]) => v !== null).map(([status, avg]) => `
+                                    <div style="flex:1;min-width:120px;padding:12px;background:var(--bg-surface-secondary);border-radius:var(--radius-sm);text-align:center">
+                                        <div style="font-size:1.25rem;font-weight:700;color:${statusColors[status] || 'var(--text-primary)'}">${avg}</div>
+                                        <div style="font-size:0.75rem;color:var(--text-tertiary);text-transform:capitalize;margin-top:4px">${status}</div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                    ${sources.length > 0 ? `
+                        <div style="margin-bottom:24px">
+                            <div style="font-size:0.8125rem;font-weight:600;color:var(--text-tertiary);margin-bottom:8px">Source Effectiveness</div>
+                            <div style="display:flex;flex-direction:column;gap:6px">
+                                ${sources.map(s => `
+                                    <div style="display:flex;align-items:center;gap:8px">
+                                        <div style="width:100px;font-size:0.8125rem;color:var(--text-secondary);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escapeHtml(s.source)}">${escapeHtml(s.source)}</div>
+                                        <div style="flex:1;height:20px;background:var(--bg-surface-secondary);border-radius:var(--radius-sm);overflow:hidden">
+                                            <div style="height:100%;width:${Math.round((s.jobs / maxSourceJobs) * 100)}%;background:var(--accent, #3b82f6);border-radius:var(--radius-sm)"></div>
+                                        </div>
+                                        <div style="width:70px;text-align:right;font-size:0.75rem;color:var(--text-tertiary)">${s.jobs} jobs${s.avg_score ? ' · ' + s.avg_score : ''}</div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                    ${velocity.length > 0 ? `
+                        <div>
+                            <div style="font-size:0.8125rem;font-weight:600;color:var(--text-tertiary);margin-bottom:8px">Weekly Job Velocity</div>
+                            <div style="display:flex;align-items:flex-end;gap:4px;height:80px">
+                                ${velocity.map(v => `
+                                    <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%">
+                                        <div style="width:100%;background:var(--accent, #3b82f6);border-radius:var(--radius-sm) var(--radius-sm) 0 0;height:${Math.round((v.count / maxVelocity) * 100)}%;min-height:2px" title="${v.week}: ${v.count} jobs"></div>
+                                        <div style="font-size:0.625rem;color:var(--text-tertiary);margin-top:4px;writing-mode:vertical-lr;transform:rotate(180deg)">${v.week.replace(/^\d{4}-/, '')}</div>
+                                    </div>
+                                `).join('')}
+                            </div>
+                        </div>
+                    ` : ''}
+                `;
+            }
+        } catch {
+            document.getElementById('analytics-container').innerHTML = '<div style="font-size:0.8125rem;color:var(--text-tertiary)">Could not load analytics.</div>';
+        }
     } catch (err) {
         showToast(err.message, 'error');
         container.innerHTML = `
@@ -1452,15 +2103,16 @@ async function renderSettings(container) {
     container.innerHTML = `<div class="loading-container"><div class="spinner spinner-lg"></div><span>Loading settings...</span></div>`;
 
     try {
-        const [config, aiSettings, profile, fullProfile, scraperKeys, customQA] = await Promise.all([
+        const [config, aiSettings, profile, fullProfile, scraperKeys, customQA, emailSettings] = await Promise.all([
             api.getSearchConfig(),
             api.getAISettings(),
             api.request('GET', '/api/profile'),
             api.request('GET', '/api/profile/full'),
             api.request('GET', '/api/scraper-keys'),
             api.request('GET', '/api/custom-qa'),
+            api.request('GET', '/api/settings/email'),
         ]);
-        settingsData = { config, aiSettings, profile, fullProfile, scraperKeys, customQA: customQA.items || [] };
+        settingsData = { config, aiSettings, profile, fullProfile, scraperKeys, customQA: customQA.items || [], emailSettings };
         renderSettingsShell(container);
     } catch (err) {
         showToast(err.message, 'error');
@@ -1504,7 +2156,7 @@ function renderActiveTab(shell) {
         case 'profile': renderTabProfile(content, d.fullProfile || d.profile || {}); break;
         case 'work-history': renderTabWorkHistory(content, d.fullProfile || {}); break;
         case 'job-search': renderTabJobSearch(content, d.config || {}, d.fullProfile || d.profile || {}, d.customQA || []); break;
-        case 'integrations': renderTabAI(content, d.aiSettings || {}, d.scraperKeys || {}); break;
+        case 'integrations': renderTabAI(content, d.aiSettings || {}, d.scraperKeys || {}, d.emailSettings || {}); break;
         case 'data': renderTabData(content); break;
     }
 }
@@ -2232,7 +2884,7 @@ function renderTabJobSearch(container, config, profile, customQA) {
 }
 
 // === Tab 4: AI & Integrations ===
-function renderTabAI(container, aiSettings, scraperKeys) {
+function renderTabAI(container, aiSettings, scraperKeys, emailSettings) {
     const aiProvider = aiSettings.provider || '';
     const aiKey = aiSettings.api_key || '';
     const aiModel = aiSettings.model || '';
@@ -2312,6 +2964,54 @@ function renderTabAI(container, aiSettings, scraperKeys) {
             </div>
             <button class="btn btn-primary" id="save-scraper-keys-btn" style="margin-top:16px">Save Scraper Keys</button>
         </div>
+
+        <div class="card" style="padding:24px;margin-bottom:24px">
+            <h2 style="font-size:1.125rem;font-weight:600;margin-bottom:8px">Email & Digest Settings</h2>
+            <p style="color:var(--text-secondary);margin-bottom:16px;font-size:0.875rem">
+                Configure SMTP for sending application emails and automated job digest notifications.
+            </p>
+            <h3 style="font-size:0.9375rem;font-weight:600;margin-bottom:12px;color:var(--text-secondary)">SMTP Configuration</h3>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+                ${settingsField('SMTP Host', 'email-smtp-host', emailSettings.smtp_host || '', 'text', { placeholder: 'smtp.gmail.com' })}
+                ${settingsField('SMTP Port', 'email-smtp-port', emailSettings.smtp_port || 587, 'number')}
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+                ${settingsField('Username', 'email-smtp-username', emailSettings.smtp_username || '', 'text', { placeholder: 'your@email.com' })}
+                ${settingsField('Password', 'email-smtp-password', '', 'password', { placeholder: emailSettings.smtp_host ? 'Configured (leave blank to keep)' : 'SMTP password' })}
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px">
+                ${settingsField('From Address', 'email-from-address', emailSettings.from_address || '', 'email', { placeholder: 'noreply@example.com' })}
+                ${settingsField('To Address (for digests)', 'email-to-address', emailSettings.to_address || '', 'email', { placeholder: 'you@example.com' })}
+            </div>
+            <div style="margin-bottom:16px">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                    <input type="checkbox" id="email-smtp-tls" ${emailSettings.smtp_use_tls !== false ? 'checked' : ''}>
+                    <span style="font-size:0.875rem">Use TLS</span>
+                </label>
+            </div>
+
+            <h3 style="font-size:0.9375rem;font-weight:600;margin-bottom:12px;margin-top:20px;color:var(--text-secondary)">Digest Settings</h3>
+            <div style="margin-bottom:12px">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                    <input type="checkbox" id="email-digest-enabled" ${emailSettings.digest_enabled ? 'checked' : ''}>
+                    <span style="font-size:0.875rem;font-weight:600">Enable automated digest emails</span>
+                </label>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:16px">
+                ${settingsSelect('Schedule', 'email-digest-schedule', emailSettings.digest_schedule || 'daily', [
+                    { value: 'daily', label: 'Daily' },
+                    { value: 'weekly', label: 'Weekly' },
+                ])}
+                ${settingsField('Send Time', 'email-digest-time', emailSettings.digest_time || '08:00', 'time')}
+                ${settingsField('Min Score', 'email-digest-min-score', emailSettings.digest_min_score || 60, 'number')}
+            </div>
+            <div style="display:flex;gap:12px">
+                <button class="btn btn-primary" id="save-email-btn">Save Email Settings</button>
+                <button class="btn btn-secondary" id="test-email-btn">Send Test Email</button>
+                <button class="btn btn-secondary" id="test-digest-btn">Send Test Digest</button>
+            </div>
+            <div id="email-test-result" style="margin-top:12px"></div>
+        </div>
     `;
 
     // AI provider toggle
@@ -2386,6 +3086,58 @@ function renderTabAI(container, aiSettings, scraperKeys) {
         };
         try { await api.request('POST', '/api/scraper-keys', payload); showToast('Scraper keys saved', 'success'); }
         catch (err) { showToast(err.message, 'error'); }
+    });
+
+    function getEmailFormValues() {
+        return {
+            smtp_host: document.getElementById('email-smtp-host').value,
+            smtp_port: parseInt(document.getElementById('email-smtp-port').value) || 587,
+            smtp_username: document.getElementById('email-smtp-username').value,
+            smtp_password: document.getElementById('email-smtp-password').value,
+            smtp_use_tls: document.getElementById('email-smtp-tls').checked,
+            from_address: document.getElementById('email-from-address').value,
+            to_address: document.getElementById('email-to-address').value,
+            digest_enabled: document.getElementById('email-digest-enabled').checked,
+            digest_schedule: document.getElementById('email-digest-schedule').value,
+            digest_time: document.getElementById('email-digest-time').value || '08:00',
+            digest_min_score: parseInt(document.getElementById('email-digest-min-score').value) || 60,
+        };
+    }
+
+    document.getElementById('save-email-btn').addEventListener('click', async () => {
+        const btn = document.getElementById('save-email-btn');
+        btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Saving...';
+        try {
+            await api.request('POST', '/api/settings/email', getEmailFormValues());
+            showToast('Email settings saved', 'success');
+        } catch (err) { showToast(err.message, 'error'); }
+        finally { btn.disabled = false; btn.textContent = 'Save Email Settings'; }
+    });
+
+    document.getElementById('test-email-btn').addEventListener('click', async () => {
+        const btn = document.getElementById('test-email-btn');
+        const resultDiv = document.getElementById('email-test-result');
+        btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending...'; resultDiv.innerHTML = '';
+        try {
+            const result = await api.request('POST', '/api/settings/email/test', getEmailFormValues());
+            resultDiv.innerHTML = `<div style="color:var(--success, #22c55e);font-size:0.875rem;font-weight:600">${escapeHtml(result.message)}</div>`;
+        } catch (err) {
+            resultDiv.innerHTML = `<div style="color:var(--danger, #ef4444);font-size:0.875rem">${escapeHtml(err.message)}</div>`;
+        }
+        finally { btn.disabled = false; btn.textContent = 'Send Test Email'; }
+    });
+
+    document.getElementById('test-digest-btn').addEventListener('click', async () => {
+        const btn = document.getElementById('test-digest-btn');
+        const resultDiv = document.getElementById('email-test-result');
+        btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Sending...'; resultDiv.innerHTML = '';
+        try {
+            const result = await api.request('POST', '/api/digest/send-test');
+            resultDiv.innerHTML = `<div style="color:var(--success, #22c55e);font-size:0.875rem;font-weight:600">${escapeHtml(result.message)}</div>`;
+        } catch (err) {
+            resultDiv.innerHTML = `<div style="color:var(--danger, #ef4444);font-size:0.875rem">${escapeHtml(err.message)}</div>`;
+        }
+        finally { btn.disabled = false; btn.textContent = 'Send Test Digest'; }
     });
 }
 
@@ -2577,12 +3329,29 @@ const SHORTCUTS = {
     'p': { desc: 'Prepare application', action: prepareCurrentJob },
     's': { desc: 'Scrape now', action: handleScrape },
     '/': { desc: 'Focus search', action: focusSearch },
+    't': { desc: 'Triage mode', action: enterTriageMode },
     '?': { desc: 'Show shortcuts', action: toggleShortcutsHelp },
     'Escape': { desc: 'Close / Go back', action: goBack },
 };
 
 document.addEventListener('keydown', (e) => {
     if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+
+    // Triage mode key bindings
+    if (triageActive) {
+        if (e.key === 'ArrowRight') { e.preventDefault(); triageKeep(); return; }
+        if (e.key === 'ArrowLeft') { e.preventDefault(); triageDismiss(); return; }
+        if (e.key === 'ArrowDown') { e.preventDefault(); triageSkip(); return; }
+        if (e.key === 'z') { e.preventDefault(); triageUndo(); return; }
+        if (e.key === 'Enter') {
+            e.preventDefault();
+            const job = triageJobs[triageIndex];
+            if (job) navigate(`#/job/${job.id}`);
+            return;
+        }
+        if (e.key === 'Escape') { e.preventDefault(); exitTriageMode(); return; }
+        return;
+    }
 
     if (e.key === 'Enter' && focusedJobIndex >= 0) {
         const cards = document.querySelectorAll('.job-card');
@@ -2664,6 +3433,111 @@ function toggleShortcutsHelp() {
 }
 
 // === Init ===
+// === Reminder Actions (global for onclick handlers) ===
+window.completeReminder = async function(id) {
+    try {
+        await api.request('POST', `/api/reminders/${id}/complete`);
+        showToast('Reminder completed', 'success');
+        handleRoute();
+    } catch (err) { showToast(err.message, 'error'); }
+};
+window.dismissReminder = async function(id) {
+    try {
+        await api.request('POST', `/api/reminders/${id}/dismiss`);
+        showToast('Reminder dismissed', 'success');
+        handleRoute();
+    } catch (err) { showToast(err.message, 'error'); }
+};
+
+// === Notifications ===
+let notifDropdownOpen = false;
+
+async function updateNotifBadge() {
+    try {
+        const data = await api.getNotifications();
+        const badge = document.getElementById('notif-badge');
+        if (badge) {
+            badge.textContent = data.unread_count;
+            badge.style.display = data.unread_count > 0 ? '' : 'none';
+        }
+    } catch {}
+}
+
+function renderNotifDropdown(notifications) {
+    const dropdown = document.getElementById('notif-dropdown');
+    if (!dropdown) return;
+
+    if (notifications.length === 0) {
+        dropdown.innerHTML = `<div class="notif-empty">No notifications</div>`;
+        return;
+    }
+
+    dropdown.innerHTML = `
+        <div class="notif-header">
+            <span style="font-weight:600;font-size:0.875rem">Notifications</span>
+            <button class="btn btn-ghost btn-sm" id="notif-read-all">Mark all read</button>
+        </div>
+        <div class="notif-list">
+            ${notifications.slice(0, 20).map(n => `
+                <div class="notif-item ${n.read ? '' : 'notif-unread'}" data-notif-id="${n.id}" data-job-id="${n.job_id}">
+                    <div class="notif-item-title">${escapeHtml(n.title)}</div>
+                    <div class="notif-item-message">${escapeHtml(n.message)}</div>
+                </div>
+            `).join('')}
+        </div>
+    `;
+
+    document.getElementById('notif-read-all')?.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        await api.markAllNotificationsRead();
+        updateNotifBadge();
+        dropdown.querySelectorAll('.notif-unread').forEach(el => el.classList.remove('notif-unread'));
+    });
+
+    dropdown.querySelectorAll('.notif-item').forEach(item => {
+        item.addEventListener('click', async () => {
+            const notifId = item.dataset.notifId;
+            const jobId = item.dataset.jobId;
+            await api.markNotificationRead(notifId);
+            item.classList.remove('notif-unread');
+            updateNotifBadge();
+            dropdown.style.display = 'none';
+            notifDropdownOpen = false;
+            navigate(`#/job/${jobId}`);
+        });
+    });
+}
+
+async function toggleNotifDropdown() {
+    const dropdown = document.getElementById('notif-dropdown');
+    if (!dropdown) return;
+    notifDropdownOpen = !notifDropdownOpen;
+    if (notifDropdownOpen) {
+        dropdown.style.display = 'block';
+        try {
+            const data = await api.getNotifications();
+            renderNotifDropdown(data.notifications);
+        } catch {}
+    } else {
+        dropdown.style.display = 'none';
+    }
+}
+
+function initNotificationSSE() {
+    const evtSource = new EventSource('/api/notifications/stream');
+    evtSource.onmessage = (event) => {
+        try {
+            const notif = JSON.parse(event.data);
+            showToast(`${notif.title}: ${notif.message}`, 'info');
+            updateNotifBadge();
+        } catch {}
+    };
+    evtSource.onerror = () => {
+        evtSource.close();
+        setTimeout(initNotificationSSE, 30000);
+    };
+}
+
 document.addEventListener('DOMContentLoaded', () => {
     initTheme();
     handleRoute();
@@ -2671,4 +3545,16 @@ document.addEventListener('DOMContentLoaded', () => {
     window.addEventListener('hashchange', handleRoute);
     document.getElementById('scrape-btn').addEventListener('click', handleScrape);
     document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+    document.getElementById('notif-btn').addEventListener('click', toggleNotifDropdown);
+
+    // Close dropdown on outside click
+    document.addEventListener('click', (e) => {
+        if (notifDropdownOpen && !e.target.closest('.notif-btn') && !e.target.closest('.notif-dropdown')) {
+            document.getElementById('notif-dropdown').style.display = 'none';
+            notifDropdownOpen = false;
+        }
+    });
+
+    updateNotifBadge();
+    initNotificationSSE();
 });

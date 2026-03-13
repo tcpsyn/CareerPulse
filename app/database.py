@@ -262,6 +262,31 @@ class Database:
                 interval_hours INTEGER NOT NULL DEFAULT 6,
                 last_scraped_at TEXT
             );
+            CREATE TABLE IF NOT EXISTS notifications (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                type TEXT NOT NULL DEFAULT 'high_score',
+                title TEXT NOT NULL,
+                message TEXT NOT NULL,
+                read INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (job_id) REFERENCES jobs(id)
+            );
+            CREATE TABLE IF NOT EXISTS email_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                smtp_host TEXT NOT NULL DEFAULT '',
+                smtp_port INTEGER NOT NULL DEFAULT 587,
+                smtp_username TEXT NOT NULL DEFAULT '',
+                smtp_password TEXT NOT NULL DEFAULT '',
+                smtp_use_tls INTEGER NOT NULL DEFAULT 1,
+                from_address TEXT NOT NULL DEFAULT '',
+                to_address TEXT NOT NULL DEFAULT '',
+                digest_enabled INTEGER NOT NULL DEFAULT 0,
+                digest_schedule TEXT NOT NULL DEFAULT 'daily',
+                digest_time TEXT NOT NULL DEFAULT '08:00',
+                digest_min_score INTEGER NOT NULL DEFAULT 60,
+                updated_at TEXT NOT NULL DEFAULT ''
+            );
         """)
         await self._migrate()
         await self.db.commit()
@@ -298,6 +323,8 @@ class Database:
             "salary_estimate_max": "ALTER TABLE jobs ADD COLUMN salary_estimate_max INTEGER",
             "salary_confidence": "ALTER TABLE jobs ADD COLUMN salary_confidence TEXT",
             "description_enriched": "ALTER TABLE jobs ADD COLUMN description_enriched INTEGER DEFAULT 0",
+            "enrichment_status": "ALTER TABLE jobs ADD COLUMN enrichment_status TEXT DEFAULT 'pending'",
+            "enrichment_attempts": "ALTER TABLE jobs ADD COLUMN enrichment_attempts INTEGER DEFAULT 0",
         }
         for col, sql in jobs_migrations.items():
             if col not in jobs_columns:
@@ -383,6 +410,38 @@ class Database:
                     (job_id, notes, now)
                 )
 
+        # Create reminders table if not exists
+        await self.db.execute("""
+            CREATE TABLE IF NOT EXISTS reminders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                remind_at TEXT NOT NULL,
+                reminder_type TEXT NOT NULL DEFAULT 'follow_up',
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                completed_at TEXT,
+                FOREIGN KEY (job_id) REFERENCES jobs(id)
+            )
+        """)
+        await self.db.execute(
+            "CREATE INDEX IF NOT EXISTS idx_reminders_status ON reminders(status, remind_at)"
+        )
+
+        # Create interview_prep table if not exists
+        await self.db.execute("""
+            CREATE TABLE IF NOT EXISTS interview_prep (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER UNIQUE NOT NULL,
+                behavioral_questions TEXT NOT NULL DEFAULT '[]',
+                technical_questions TEXT NOT NULL DEFAULT '[]',
+                star_stories TEXT NOT NULL DEFAULT '[]',
+                talking_points TEXT NOT NULL DEFAULT '[]',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY (job_id) REFERENCES jobs(id)
+            )
+        """)
+        await self.db.commit()
+
         # Clean HTML entities from existing job titles/companies
         await self._clean_html_entities()
 
@@ -444,11 +503,12 @@ class Database:
 
     async def get_jobs_needing_enrichment(self, limit: int = 50) -> list[dict]:
         cursor = await self.db.execute(
-            """SELECT j.id, j.url, j.description FROM jobs j
+            """SELECT j.id, j.url, j.description, j.enrichment_attempts FROM jobs j
                INNER JOIN sources s ON s.job_id = j.id
                WHERE j.description_enriched = 0
                AND (j.description IS NULL OR length(j.description) < 200)
                AND j.dismissed = 0
+               AND NOT (j.enrichment_status = 'failed' AND j.enrichment_attempts >= 3)
                GROUP BY j.id
                ORDER BY j.created_at DESC LIMIT ?""",
             (limit,),
@@ -456,9 +516,16 @@ class Database:
         rows = await cursor.fetchall()
         return [dict(row) for row in rows]
 
+    async def update_enrichment_status(self, job_id: int, status: str, attempts: int):
+        await self.db.execute(
+            "UPDATE jobs SET enrichment_status = ?, enrichment_attempts = ? WHERE id = ?",
+            (status, attempts, job_id),
+        )
+        await self.db.commit()
+
     async def update_job_description(self, job_id: int, description: str):
         await self.db.execute(
-            "UPDATE jobs SET description = ?, description_enriched = 1 WHERE id = ?",
+            "UPDATE jobs SET description = ?, description_enriched = 1, enrichment_status = 'enriched' WHERE id = ?",
             (description, job_id),
         )
         await self.db.commit()
@@ -484,6 +551,124 @@ class Database:
         d["concerns"] = json.loads(d["concerns"])
         d["suggested_keywords"] = json.loads(d["suggested_keywords"])
         return d
+
+    async def get_analytics(self) -> dict:
+        # Funnel conversion rates
+        funnel = {}
+        for status in ["interested", "prepared", "applied", "interviewing", "offered", "rejected"]:
+            cursor = await self.db.execute(
+                "SELECT COUNT(*) FROM applications WHERE status = ?", (status,))
+            row = await cursor.fetchone()
+            funnel[status] = row[0]
+
+        # Score calibration: avg score by application status
+        calibration = {}
+        for status in ["interested", "applied", "interviewing", "rejected"]:
+            cursor = await self.db.execute(
+                """SELECT AVG(js.match_score) FROM applications a
+                   JOIN job_scores js ON js.job_id = a.job_id
+                   WHERE a.status = ?""", (status,))
+            row = await cursor.fetchone()
+            calibration[status] = round(row[0], 1) if row[0] else None
+
+        # Source effectiveness: jobs per source, avg score per source
+        cursor = await self.db.execute(
+            """SELECT s.source_name,
+                      COUNT(DISTINCT s.job_id) as job_count,
+                      AVG(js.match_score) as avg_score
+               FROM sources s
+               LEFT JOIN job_scores js ON js.job_id = s.job_id
+               GROUP BY s.source_name
+               ORDER BY job_count DESC""")
+        source_rows = await cursor.fetchall()
+        sources = [{"source": r["source_name"], "jobs": r["job_count"],
+                    "avg_score": round(r["avg_score"], 1) if r["avg_score"] else None}
+                   for r in source_rows]
+
+        # Weekly velocity: jobs added per week (last 8 weeks)
+        cursor = await self.db.execute(
+            """SELECT strftime('%Y-W%W', created_at) as week,
+                      COUNT(*) as count
+               FROM jobs
+               WHERE created_at >= date('now', '-56 days')
+               GROUP BY week
+               ORDER BY week""")
+        velocity = [{"week": r[0], "count": r[1]} for r in await cursor.fetchall()]
+
+        return {
+            "funnel": funnel,
+            "score_calibration": calibration,
+            "sources": sources,
+            "weekly_velocity": velocity,
+        }
+
+    async def get_skill_gap_data(self, min_score: int = 50, max_score: int = 80) -> dict:
+        cursor = await self.db.execute(
+            """SELECT js.concerns, js.suggested_keywords, j.title, j.company
+               FROM job_scores js
+               JOIN jobs j ON j.id = js.job_id
+               WHERE js.match_score >= ? AND js.match_score <= ? AND j.dismissed = 0""",
+            (min_score, max_score),
+        )
+        rows = await cursor.fetchall()
+        all_concerns = []
+        all_keywords = []
+        job_count = len(rows)
+        for row in rows:
+            d = dict(row)
+            concerns = json.loads(d.get("concerns", "[]"))
+            keywords = json.loads(d.get("suggested_keywords", "[]"))
+            all_concerns.extend(concerns)
+            all_keywords.extend(keywords)
+
+        concern_counts = {}
+        for c in all_concerns:
+            c_lower = c.lower().strip()
+            if c_lower:
+                concern_counts[c_lower] = concern_counts.get(c_lower, 0) + 1
+
+        keyword_counts = {}
+        for k in all_keywords:
+            k_lower = k.lower().strip()
+            if k_lower:
+                keyword_counts[k_lower] = keyword_counts.get(k_lower, 0) + 1
+
+        return {
+            "job_count": job_count,
+            "top_concerns": sorted(concern_counts.items(), key=lambda x: -x[1])[:20],
+            "top_keywords": sorted(keyword_counts.items(), key=lambda x: -x[1])[:20],
+        }
+
+    async def insert_notification(self, job_id: int, type: str, title: str, message: str) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = await self.db.execute(
+            "INSERT INTO notifications (job_id, type, title, message, created_at) VALUES (?, ?, ?, ?, ?)",
+            (job_id, type, title, message, now),
+        )
+        await self.db.commit()
+        return cursor.lastrowid
+
+    async def get_notifications(self, unread_only: bool = False, limit: int = 50) -> list[dict]:
+        query = "SELECT * FROM notifications"
+        if unread_only:
+            query += " WHERE read = 0"
+        query += " ORDER BY created_at DESC LIMIT ?"
+        cursor = await self.db.execute(query, (limit,))
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_unread_notification_count(self) -> int:
+        cursor = await self.db.execute("SELECT COUNT(*) FROM notifications WHERE read = 0")
+        row = await cursor.fetchone()
+        return row[0] if row else 0
+
+    async def mark_notification_read(self, notification_id: int):
+        await self.db.execute("UPDATE notifications SET read = 1 WHERE id = ?", (notification_id,))
+        await self.db.commit()
+
+    async def mark_all_notifications_read(self):
+        await self.db.execute("UPDATE notifications SET read = 1 WHERE read = 0")
+        await self.db.commit()
 
     async def insert_application(self, job_id, status="interested"):
         cursor = await self.db.execute(
@@ -832,6 +1017,100 @@ class Database:
             (job_id, event_type, detail, now)
         )
         await self.db.commit()
+
+    async def create_reminder(self, job_id: int, remind_at: str, reminder_type: str = "follow_up") -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = await self.db.execute(
+            "INSERT INTO reminders (job_id, remind_at, reminder_type, status, created_at) VALUES (?, ?, ?, 'pending', ?)",
+            (job_id, remind_at, reminder_type, now)
+        )
+        await self.db.commit()
+        return cursor.lastrowid
+
+    async def get_reminders(self, status: str | None = None, include_job: bool = False) -> list[dict]:
+        if include_job:
+            query = """
+                SELECT r.*, j.title, j.company, j.url
+                FROM reminders r
+                INNER JOIN jobs j ON r.job_id = j.id
+            """
+        else:
+            query = "SELECT * FROM reminders"
+        params = []
+        if status:
+            query += " WHERE r.status = ?" if include_job else " WHERE status = ?"
+            params.append(status)
+        query += " ORDER BY remind_at ASC"
+        cursor = await self.db.execute(query, params)
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def get_due_reminders(self) -> list[dict]:
+        now = datetime.now(timezone.utc).isoformat()
+        cursor = await self.db.execute("""
+            SELECT r.*, j.title, j.company, j.url, a.status as app_status
+            FROM reminders r
+            INNER JOIN jobs j ON r.job_id = j.id
+            LEFT JOIN applications a ON r.job_id = a.job_id
+            WHERE r.status = 'pending' AND r.remind_at <= ?
+            ORDER BY r.remind_at ASC
+        """, (now,))
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def complete_reminder(self, reminder_id: int):
+        now = datetime.now(timezone.utc).isoformat()
+        await self.db.execute(
+            "UPDATE reminders SET status = 'completed', completed_at = ? WHERE id = ?",
+            (now, reminder_id)
+        )
+        await self.db.commit()
+
+    async def dismiss_reminder(self, reminder_id: int):
+        await self.db.execute(
+            "UPDATE reminders SET status = 'dismissed' WHERE id = ?",
+            (reminder_id,)
+        )
+        await self.db.commit()
+
+    async def get_reminders_for_job(self, job_id: int) -> list[dict]:
+        cursor = await self.db.execute(
+            "SELECT * FROM reminders WHERE job_id = ? ORDER BY remind_at ASC",
+            (job_id,)
+        )
+        return [dict(r) for r in await cursor.fetchall()]
+
+    async def save_interview_prep(self, job_id: int, prep: dict):
+        now = datetime.now(timezone.utc).isoformat()
+        await self.db.execute(
+            """INSERT INTO interview_prep (job_id, behavioral_questions, technical_questions, star_stories, talking_points, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(job_id) DO UPDATE SET
+               behavioral_questions=excluded.behavioral_questions,
+               technical_questions=excluded.technical_questions,
+               star_stories=excluded.star_stories,
+               talking_points=excluded.talking_points,
+               created_at=excluded.created_at""",
+            (job_id,
+             json.dumps(prep.get("behavioral_questions", [])),
+             json.dumps(prep.get("technical_questions", [])),
+             json.dumps(prep.get("star_stories", [])),
+             json.dumps(prep.get("talking_points", [])),
+             now)
+        )
+        await self.db.commit()
+
+    async def get_interview_prep(self, job_id: int) -> dict | None:
+        cursor = await self.db.execute(
+            "SELECT * FROM interview_prep WHERE job_id = ?", (job_id,)
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["behavioral_questions"] = json.loads(d["behavioral_questions"])
+        d["technical_questions"] = json.loads(d["technical_questions"])
+        d["star_stories"] = json.loads(d["star_stories"])
+        d["talking_points"] = json.loads(d["talking_points"])
+        return d
 
     async def get_events(self, job_id: int) -> list[dict]:
         cursor = await self.db.execute(
@@ -1324,3 +1603,45 @@ class Database:
             row = await cursor.fetchone()
             stats[key] = row[0]
         return stats
+
+    async def get_email_settings(self) -> dict | None:
+        cursor = await self.db.execute("SELECT * FROM email_settings WHERE id = 1")
+        row = await cursor.fetchone()
+        if not row:
+            return None
+        d = dict(row)
+        d["smtp_use_tls"] = bool(d.get("smtp_use_tls", 1))
+        d["digest_enabled"] = bool(d.get("digest_enabled", 0))
+        return d
+
+    async def update_email_settings(self, settings: dict):
+        now = datetime.now(timezone.utc).isoformat()
+        await self.db.execute(
+            """INSERT INTO email_settings
+               (id, smtp_host, smtp_port, smtp_username, smtp_password, smtp_use_tls,
+                from_address, to_address, digest_enabled, digest_schedule,
+                digest_time, digest_min_score, updated_at)
+               VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+               ON CONFLICT(id) DO UPDATE SET
+                smtp_host=excluded.smtp_host, smtp_port=excluded.smtp_port,
+                smtp_username=excluded.smtp_username, smtp_password=excluded.smtp_password,
+                smtp_use_tls=excluded.smtp_use_tls, from_address=excluded.from_address,
+                to_address=excluded.to_address, digest_enabled=excluded.digest_enabled,
+                digest_schedule=excluded.digest_schedule, digest_time=excluded.digest_time,
+                digest_min_score=excluded.digest_min_score, updated_at=excluded.updated_at""",
+            (
+                settings.get("smtp_host", ""),
+                settings.get("smtp_port", 587),
+                settings.get("smtp_username", ""),
+                settings.get("smtp_password", ""),
+                int(settings.get("smtp_use_tls", True)),
+                settings.get("from_address", ""),
+                settings.get("to_address", ""),
+                int(settings.get("digest_enabled", False)),
+                settings.get("digest_schedule", "daily"),
+                settings.get("digest_time", "08:00"),
+                settings.get("digest_min_score", 60),
+                now,
+            ),
+        )
+        await self.db.commit()

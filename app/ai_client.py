@@ -3,8 +3,54 @@ import logging
 import os
 
 import httpx
+from tenacity import (
+    retry,
+    retry_if_exception,
+    stop_after_attempt,
+    wait_exponential_jitter,
+    before_sleep_log,
+)
+
+from app.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
+
+_ai_breaker = CircuitBreaker(failure_threshold=5, cooldown_seconds=300.0)
+
+RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
+
+
+def _is_retryable(exc: BaseException) -> bool:
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in RETRYABLE_STATUS_CODES
+    if isinstance(exc, httpx.TransportError):
+        return True
+    try:
+        import anthropic
+        if isinstance(exc, anthropic.RateLimitError):
+            return True
+        if isinstance(exc, anthropic.InternalServerError):
+            return True
+    except ImportError:
+        pass
+    try:
+        import openai
+        if isinstance(exc, openai.RateLimitError):
+            return True
+        if isinstance(exc, openai.InternalServerError):
+            return True
+    except ImportError:
+        pass
+    return False
+
+
+_ai_retry = retry(
+    retry=retry_if_exception(_is_retryable),
+    stop=stop_after_attempt(4),  # 1 initial + 3 retries
+    wait=wait_exponential_jitter(initial=2, max=30),
+    before_sleep=before_sleep_log(logger, logging.WARNING),
+    reraise=True,
+)
 
 
 def _resolve_ollama_url(url: str) -> str:
@@ -59,6 +105,23 @@ class AIClient:
         return ""
 
     async def chat(self, prompt: str, max_tokens: int = 1024) -> str:
+        service = f"ai:{self.provider}"
+        if _ai_breaker.is_open(service):
+            raise RuntimeError(f"Circuit breaker open for {service}")
+        try:
+            result = await self._chat_with_retry(prompt, max_tokens)
+            _ai_breaker.record_success(service)
+            return result
+        except ValueError:
+            raise
+        except RuntimeError:
+            raise
+        except Exception:
+            _ai_breaker.record_failure(service)
+            raise
+
+    @_ai_retry
+    async def _chat_with_retry(self, prompt: str, max_tokens: int) -> str:
         if self.provider == "anthropic":
             return await self._anthropic_chat(prompt, max_tokens)
         elif self.provider == "ollama":
