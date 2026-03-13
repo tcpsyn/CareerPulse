@@ -270,6 +270,14 @@ async function renderFeed(container) {
                 <option value="latam">Latin America</option>
                 <option value="apac">Asia-Pacific</option>
             </select>
+            <select class="filter-select" id="filter-posted-within">
+                <option value="">Any date</option>
+                <option value="24h">Last 24 hours</option>
+                <option value="3d">Last 3 days</option>
+                <option value="7d">Last 7 days</option>
+                <option value="14d">Last 2 weeks</option>
+                <option value="30d">Last 30 days</option>
+            </select>
             <select class="filter-select" id="filter-clearance">
                 <option value="">Any clearance</option>
                 <option value="hide">Hide clearance/visa required</option>
@@ -298,6 +306,7 @@ async function renderFeed(container) {
     const locationInput = document.getElementById('filter-location');
     const regionSelect = document.getElementById('filter-region');
     const clearanceSelect = document.getElementById('filter-clearance');
+    const postedWithinSelect = document.getElementById('filter-posted-within');
     const loadMoreBtn = document.getElementById('load-more-btn');
 
     let debounceTimer;
@@ -320,6 +329,7 @@ async function renderFeed(container) {
     employmentSelect.addEventListener('change', reload);
     regionSelect.addEventListener('change', reload);
     clearanceSelect.addEventListener('change', reload);
+    postedWithinSelect.addEventListener('change', reload);
     loadMoreBtn.addEventListener('click', () => loadJobs(true));
 
     // Select mode
@@ -375,6 +385,7 @@ async function loadJobs(append) {
         location: document.getElementById('filter-location')?.value || '',
         region: document.getElementById('filter-region')?.value || '',
         clearance: document.getElementById('filter-clearance')?.value || '',
+        posted_within: document.getElementById('filter-posted-within')?.value || '',
     };
 
     try {

@@ -220,6 +220,7 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
         location: str | None = Query(None),
         region: str | None = Query(None),
         clearance: str | None = Query(None),
+        posted_within: str | None = Query(None),
     ):
         config = await app.state.db.get_search_config()
         exclude_terms = config.get("exclude_terms", []) if config else []
@@ -229,6 +230,7 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
             work_type=work_type, employment_type=employment_type,
             location=location, exclude_terms=exclude_terms,
             region=region, clearance=clearance,
+            posted_within=posted_within,
         )
         return {"jobs": jobs}
 

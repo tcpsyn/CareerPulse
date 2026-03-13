@@ -564,7 +564,8 @@ class Database:
     async def list_jobs(self, sort_by="score", limit=50, offset=0, min_score=None,
                         search=None, source=None, dismissed=False,
                         work_type=None, employment_type=None, location=None,
-                        exclude_terms=None, region=None, clearance=None):
+                        exclude_terms=None, region=None, clearance=None,
+                        posted_within=None):
         query = """
             SELECT j.*, js.match_score, js.match_reasons, js.concerns, a.status as app_status
             FROM jobs j
@@ -623,8 +624,14 @@ class Database:
             elif clearance == "only":
                 query += f" AND ({clauses})"
             params.extend(clearance_terms)
+        if posted_within:
+            days_map = {"24h": 1, "3d": 3, "7d": 7, "14d": 14, "30d": 30}
+            days = days_map.get(posted_within)
+            if days:
+                query += " AND COALESCE(j.posted_date, j.created_at) >= datetime('now', ?)"
+                params.append(f"-{days} days")
         if sort_by == "score":
-            query += " ORDER BY js.match_score DESC NULLS LAST"
+            query += " ORDER BY js.match_score DESC NULLS LAST, COALESCE(j.posted_date, j.created_at) DESC"
         elif sort_by == "freshest":
             query += " ORDER BY COALESCE(j.posted_date, j.created_at) DESC"
         else:
