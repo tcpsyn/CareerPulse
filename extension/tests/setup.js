@@ -8,8 +8,21 @@ globalThis.chrome = {
   },
   storage: {
     local: {
-      get: vi.fn().mockResolvedValue({ serverUrl: 'http://localhost:8001' }),
-      set: vi.fn().mockResolvedValue(undefined),
+      get: vi.fn().mockImplementation((query, callback) => {
+        const result = { serverUrl: 'http://localhost:8001', dismissedHosts: [] };
+        if (typeof callback === 'function') {
+          callback(result);
+          return undefined;
+        }
+        return Promise.resolve(result);
+      }),
+      set: vi.fn().mockImplementation((data, callback) => {
+        if (typeof callback === 'function') {
+          callback();
+          return undefined;
+        }
+        return Promise.resolve(undefined);
+      }),
     },
   },
 };

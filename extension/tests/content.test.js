@@ -7,17 +7,32 @@ import {
 import { readFileSync } from 'fs';
 import { join } from 'path';
 
-// Load and execute the content script IIFE
+// Load dependency IIFEs (normalize.js, ats-adapters.js) then content.js
 function loadScript() {
   window.__cpAutofillLoaded = false;
   window.__cpAutofillTest = true;
   window.__cpAutofillTestAPI = undefined;
+  window.__cpNormalize = undefined;
+  window.__cpAtsAdapters = undefined;
+
+  // Load normalize.js first
+  const normCode = readFileSync(join(__dirname, '..', 'normalize.js'), 'utf-8');
+  eval(normCode);
+
+  // Load ats-adapters.js
+  const atsCode = readFileSync(join(__dirname, '..', 'ats-adapters.js'), 'utf-8');
+  eval(atsCode);
 
   const code = readFileSync(join(__dirname, '..', 'content.js'), 'utf-8');
   // Replace chrome.runtime references in the IIFE to avoid errors during load
-  const safeCode = code.replace(
+  let safeCode = code.replace(
     /chrome\.runtime\.onMessage\.addListener/g,
     'globalThis.chrome.runtime.onMessage.addListener'
+  );
+  // Disable auto-detection observers/timeouts that fire during load
+  safeCode = safeCode.replace(
+    /badgeObserver\.observe\(document\.documentElement,\s*\{[\s\S]*?\}\);/g,
+    '/* badgeObserver disabled in tests */'
   );
   eval(safeCode);
   return window.__cpAutofillTestAPI;
@@ -26,12 +41,16 @@ function loadScript() {
 let api;
 
 beforeEach(() => {
+  vi.useFakeTimers({ shouldAdvanceTime: true });
   cleanDOM();
   api = loadScript();
 });
 
 afterEach(() => {
+  // Stop multi-page tracking if active (to clean up observers)
+  try { api.stopMultiPageTracking(); } catch { /* skip */ }
   cleanDOM();
+  vi.useRealTimers();
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -984,5 +1003,333 @@ describe('edge cases', () => {
     const selector = `#${CSS.escape('field-with.dots:and-colons')}`;
     const result = await api.fillField(selector, 'test', 'fill_text');
     expect(result.success).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Auto-detection of application forms
+// ═══════════════════════════════════════════════════════════════
+
+describe('detectApplicationForm', () => {
+  it('returns high confidence when 3+ field signals present', () => {
+    createInput({ type: 'text', name: 'firstName', id: 'firstName' });
+    createInput({ type: 'text', name: 'lastName', id: 'lastName' });
+    createInput({ type: 'email', name: 'email', id: 'email' });
+
+    const confidence = api.detectApplicationForm();
+    expect(confidence).toBe('high');
+  });
+
+  it('returns medium confidence with 1 field signal and application title', () => {
+    createInput({ type: 'email', name: 'email', id: 'email' });
+    document.title = 'Apply for Software Engineer';
+
+    const confidence = api.detectApplicationForm();
+    expect(confidence).toBe('medium');
+  });
+
+  it('returns none for pages without field signals or matching URL', () => {
+    createInput({ type: 'text', name: 'search', id: 'search' });
+
+    const confidence = api.detectApplicationForm();
+    expect(confidence).toBe('none');
+  });
+
+  it('counts resume file input as a field signal', () => {
+    createInput({ type: 'text', name: 'firstName', id: 'firstName' });
+    createInput({ type: 'text', name: 'lastName', id: 'lastName' });
+    createInput({ type: 'file', name: 'resume', id: 'resume' });
+
+    const confidence = api.detectApplicationForm();
+    expect(confidence).toBe('high');
+  });
+
+  it('detects phone as a field signal', () => {
+    createInput({ type: 'text', name: 'firstName', id: 'firstName' });
+    createInput({ type: 'text', name: 'lastName', id: 'lastName' });
+    createInput({ type: 'tel', name: 'phone', id: 'phone' });
+
+    const confidence = api.detectApplicationForm();
+    expect(confidence).toBe('high');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Phone field detection
+// ═══════════════════════════════════════════════════════════════
+
+describe('isPhoneField', () => {
+  it('detects type="tel"', () => {
+    const input = createInput({ type: 'tel', name: 'phone_number', id: 'ph' });
+    expect(api.isPhoneField(input)).toBe(true);
+  });
+
+  it('detects by name attribute', () => {
+    const input = createInput({ type: 'text', name: 'phone', id: 'ph2' });
+    expect(api.isPhoneField(input)).toBe(true);
+  });
+
+  it('detects by label', () => {
+    const input = createInput({ type: 'text', name: 'field1', id: 'field1' });
+    createLabel('field1', 'Phone Number');
+    expect(api.isPhoneField(input)).toBe(true);
+  });
+
+  it('detects mobile in name', () => {
+    const input = createInput({ type: 'text', name: 'mobile_number', id: 'mob' });
+    expect(api.isPhoneField(input)).toBe(true);
+  });
+
+  it('does not detect firstName', () => {
+    const input = createInput({ type: 'text', name: 'firstName', id: 'fn' });
+    expect(api.isPhoneField(input)).toBe(false);
+  });
+
+  it('does not detect email', () => {
+    const input = createInput({ type: 'email', name: 'email', id: 'em' });
+    expect(api.isPhoneField(input)).toBe(false);
+  });
+
+  it('returns false for null', () => {
+    expect(api.isPhoneField(null)).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Resume upload field detection
+// ═══════════════════════════════════════════════════════════════
+
+describe('detectUploadType', () => {
+  it('detects resume upload field', () => {
+    const input = createInput({ type: 'file', name: 'resume', id: 'resume-upload' });
+    createLabel('resume-upload', 'Resume');
+    expect(api.detectUploadType(input)).toBe('resume');
+  });
+
+  it('detects cover letter upload field', () => {
+    const input = createInput({ type: 'file', name: 'cover_letter', id: 'cl-upload' });
+    createLabel('cl-upload', 'Cover Letter');
+    expect(api.detectUploadType(input)).toBe('cover-letter');
+  });
+
+  it('detects CV as resume', () => {
+    const input = createInput({ type: 'file', name: 'cv_file', id: 'cv-upload' });
+    createLabel('cv-upload', 'CV Upload');
+    expect(api.detectUploadType(input)).toBe('resume');
+  });
+
+  it('returns null for unrecognized file input', () => {
+    const input = createInput({ type: 'file', name: 'photo', id: 'photo-upload' });
+    createLabel('photo-upload', 'Photo');
+    expect(api.detectUploadType(input)).toBeNull();
+  });
+
+  it('returns null for generic file input without document hints', () => {
+    const input = createInput({ type: 'file', name: 'attachment', id: 'attach' });
+    createLabel('attach', 'Upload File');
+    expect(api.detectUploadType(input)).toBeNull();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Multi-page state tracking
+// ═══════════════════════════════════════════════════════════════
+
+describe('multi-page tracking', () => {
+  it('startMultiPageTracking initializes state', () => {
+    api.startMultiPageTracking(5);
+    // After starting, stopMultiPageTracking should work without error
+    api.stopMultiPageTracking();
+  });
+
+  it('stopMultiPageTracking cleans up without error', () => {
+    api.startMultiPageTracking(3);
+    api.stopMultiPageTracking();
+    // Calling stop again should be a no-op
+    api.stopMultiPageTracking();
+  });
+
+  it('stopMultiPageTracking is safe when not started', () => {
+    // Should not throw
+    api.stopMultiPageTracking();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// originalValues Map (overlay undo tracking)
+// ═══════════════════════════════════════════════════════════════
+
+describe('originalValues tracking', () => {
+  it('is populated after fillField', async () => {
+    createInput({ id: 'tracked', type: 'text' });
+    await api.fillField('#tracked', 'test value', 'fill_text', 0.9, 'Tracked Field');
+
+    expect(api.originalValues.size).toBeGreaterThanOrEqual(1);
+    const entry = api.originalValues.get('#tracked');
+    expect(entry).toBeDefined();
+    expect(entry.value).toBe('test value');
+    expect(entry.label).toBe('Tracked Field');
+    expect(entry.confidence).toBe(0.9);
+    expect(entry.undone).toBe(false);
+  });
+
+  it('stores original value for undo', async () => {
+    const input = createInput({ id: 'undo-test', type: 'text', value: 'original' });
+    await api.fillField('#undo-test', 'new value', 'fill_text');
+
+    const entry = api.originalValues.get('#undo-test');
+    expect(entry.originalValue).toBe('original');
+  });
+
+  it('undoField restores original value', async () => {
+    const input = createInput({ id: 'undo-field', type: 'text', value: 'before' });
+    await api.fillField('#undo-field', 'after', 'fill_text');
+    expect(input.value).toBe('after');
+
+    api.undoField('#undo-field');
+    expect(input.value).toBe('before');
+
+    const entry = api.originalValues.get('#undo-field');
+    expect(entry.undone).toBe(true);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// ATS adapter detection
+// ═══════════════════════════════════════════════════════════════
+
+describe('ATS adapter detection', () => {
+  it('detects Workday URL', () => {
+    const adapters = window.__cpAtsAdapters;
+    const adapter = adapters.detectATS('https://company.myworkdayjobs.com/en-US/job/12345', document);
+    expect(adapter).not.toBeNull();
+    expect(adapter.name).toBe('Workday');
+  });
+
+  it('detects Greenhouse URL', () => {
+    const adapters = window.__cpAtsAdapters;
+    const adapter = adapters.detectATS('https://boards.greenhouse.io/company/jobs/12345', document);
+    expect(adapter).not.toBeNull();
+    expect(adapter.name).toBe('Greenhouse');
+  });
+
+  it('detects Lever URL', () => {
+    const adapters = window.__cpAtsAdapters;
+    const adapter = adapters.detectATS('https://jobs.lever.co/company/apply', document);
+    expect(adapter).not.toBeNull();
+    expect(adapter.name).toBe('Lever');
+  });
+
+  it('detects iCIMS URL', () => {
+    const adapters = window.__cpAtsAdapters;
+    const adapter = adapters.detectATS('https://careers.icims.com/company/job/12345', document);
+    expect(adapter).not.toBeNull();
+    expect(adapter.name).toBe('iCIMS');
+  });
+
+  it('detects Taleo URL', () => {
+    const adapters = window.__cpAtsAdapters;
+    const adapter = adapters.detectATS('https://company.taleo.net/apply/12345', document);
+    expect(adapter).not.toBeNull();
+    expect(adapter.name).toBe('Taleo');
+  });
+
+  it('returns null for unknown URL', () => {
+    const adapters = window.__cpAtsAdapters;
+    const adapter = adapters.detectATS('https://example.com/jobs', document);
+    expect(adapter).toBeNull();
+  });
+
+  it('lists all adapter names', () => {
+    const names = window.__cpAtsAdapters.listAdapters();
+    expect(names).toContain('Workday');
+    expect(names).toContain('Greenhouse');
+    expect(names).toContain('Lever');
+    expect(names).toContain('iCIMS');
+    expect(names).toContain('Taleo');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Normalized fuzzy matching (select dropdowns)
+// ═══════════════════════════════════════════════════════════════
+
+describe('fuzzyMatchOption with normalization', () => {
+  it('matches state abbreviation via normalization', () => {
+    const options = [
+      { value: '', text: 'Select...' },
+      { value: 'NM', text: 'New Mexico' },
+      { value: 'NY', text: 'New York' },
+    ];
+    // When normalization is available, "NM" should match option at index 1
+    const idx = api.fuzzyMatchOption(options, 'NM');
+    expect(idx).toBe(1);
+  });
+
+  it('matches country name via normalization', () => {
+    const options = [
+      { value: 'us', text: 'United States' },
+      { value: 'ca', text: 'Canada' },
+    ];
+    const idx = api.fuzzyMatchOption(options, 'USA');
+    expect(idx).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// getFieldHints
+// ═══════════════════════════════════════════════════════════════
+
+describe('getFieldHints', () => {
+  it('returns label, name, id, placeholder', () => {
+    const input = createInput({ type: 'text', name: 'firstName', id: 'fn', placeholder: 'Enter name' });
+    createLabel('fn', 'First Name');
+    const hints = api.getFieldHints(input);
+    expect(hints.name).toBe('firstName');
+    expect(hints.id).toBe('fn');
+    expect(hints.placeholder).toBe('Enter name');
+    expect(hints.label).toBe('First Name');
+  });
+
+  it('returns empty strings for null element', () => {
+    const hints = api.getFieldHints(null);
+    expect(hints.label).toBe('');
+    expect(hints.name).toBe('');
+    expect(hints.id).toBe('');
+    expect(hints.placeholder).toBe('');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Badge display
+// ═══════════════════════════════════════════════════════════════
+
+describe('auto-detection badge', () => {
+  it('showBadge adds badge element to DOM', () => {
+    api.showBadge('high');
+    const badge = document.querySelector('.cp-auto-badge');
+    expect(badge).not.toBeNull();
+    expect(badge.textContent).toContain('CareerPulse');
+  });
+
+  it('removeBadge cleans up badge', () => {
+    api.showBadge('high');
+    expect(document.querySelector('.cp-auto-badge')).not.toBeNull();
+
+    api.removeBadge();
+    expect(document.querySelector('.cp-auto-badge')).toBeNull();
+  });
+
+  it('showBadge with medium confidence adds medium class', () => {
+    api.showBadge('medium');
+    const badge = document.querySelector('.cp-auto-badge');
+    expect(badge.classList.contains('cp-badge-medium')).toBe(true);
+  });
+
+  it('showBadge does not add duplicate badges', () => {
+    api.showBadge('high');
+    api.showBadge('high');
+    const badges = document.querySelectorAll('.cp-auto-badge');
+    expect(badges.length).toBe(1);
   });
 });
