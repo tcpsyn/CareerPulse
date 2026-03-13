@@ -4,6 +4,13 @@ import re
 import httpx
 from bs4 import BeautifulSoup
 
+try:
+    from playwright.async_api import async_playwright
+    PLAYWRIGHT_AVAILABLE = True
+except ImportError:
+    async_playwright = None
+    PLAYWRIGHT_AVAILABLE = False
+
 logger = logging.getLogger(__name__)
 
 HEADERS = {
@@ -33,6 +40,38 @@ async def fetch_linkedin_guest_api(job_id: str) -> str | None:
     if el:
         text = el.get_text(separator="\n", strip=True)
         return text if len(text) > 50 else None
+    return None
+
+
+async def fetch_linkedin_playwright(url: str) -> str | None:
+    """Fetch LinkedIn job description using headless browser."""
+    if not PLAYWRIGHT_AVAILABLE:
+        logger.debug("Playwright not installed, skipping browser fallback")
+        return None
+
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(headless=True)
+            try:
+                context = await browser.new_context(
+                    user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                )
+                page = await context.new_page()
+                await page.goto(url, wait_until="domcontentloaded", timeout=20000)
+                await page.wait_for_selector(
+                    ".show-more-less-html__markup, .description__text, .jobs-description__content",
+                    timeout=10000,
+                )
+                el = await page.query_selector(
+                    ".show-more-less-html__markup, .description__text, .jobs-description__content"
+                )
+                if el:
+                    text = await el.inner_text()
+                    return text.strip() if len(text.strip()) > 50 else None
+            finally:
+                await browser.close()
+    except Exception as e:
+        logger.warning(f"Playwright enrichment failed for {url}: {e}")
     return None
 
 

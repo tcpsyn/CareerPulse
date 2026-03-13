@@ -1,4 +1,6 @@
 import re
+from unittest.mock import AsyncMock, patch
+
 import pytest
 from app.enrichment import enrich_job_description, extract_linkedin_job_id, fetch_linkedin_guest_api
 
@@ -148,4 +150,53 @@ async def test_fetch_linkedin_guest_api_returns_none_on_error(httpx_mock):
         status_code=429,
     )
     result = await fetch_linkedin_guest_api("4567890123")
+    assert result is None
+
+
+# Playwright fallback tests
+
+
+@pytest.mark.asyncio
+async def test_fetch_linkedin_playwright_success():
+    """Test Playwright fetcher with mocked browser."""
+    from app.enrichment import fetch_linkedin_playwright
+
+    mock_page = AsyncMock()
+    mock_page.goto = AsyncMock()
+    mock_page.wait_for_selector = AsyncMock()
+    mock_page.query_selector = AsyncMock()
+
+    mock_element = AsyncMock()
+    mock_element.inner_text = AsyncMock(return_value="Full job description from Playwright with enough content to pass the length check easily")
+    mock_page.query_selector.return_value = mock_element
+
+    mock_context = AsyncMock()
+    mock_context.new_page = AsyncMock(return_value=mock_page)
+    mock_context.__aenter__ = AsyncMock(return_value=mock_context)
+    mock_context.__aexit__ = AsyncMock(return_value=False)
+
+    mock_browser = AsyncMock()
+    mock_browser.new_context = AsyncMock(return_value=mock_context)
+
+    mock_pw_instance = AsyncMock()
+    mock_pw_instance.chromium.launch = AsyncMock(return_value=mock_browser)
+
+    mock_pw = AsyncMock()
+    mock_pw.__aenter__ = AsyncMock(return_value=mock_pw_instance)
+    mock_pw.__aexit__ = AsyncMock(return_value=False)
+
+    with patch("app.enrichment.async_playwright", return_value=mock_pw):
+        result = await fetch_linkedin_playwright("https://www.linkedin.com/jobs/view/123456789")
+
+    assert result is not None
+    assert "Full job description" in result
+
+
+@pytest.mark.asyncio
+async def test_fetch_linkedin_playwright_not_installed():
+    """Returns None when playwright is not installed."""
+    from app.enrichment import fetch_linkedin_playwright
+
+    with patch("app.enrichment.PLAYWRIGHT_AVAILABLE", False):
+        result = await fetch_linkedin_playwright("https://www.linkedin.com/jobs/view/123456789")
     assert result is None
