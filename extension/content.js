@@ -10,6 +10,10 @@
   const API_TIMEOUT_MS = 30000;   // Max time for API analyze call
   let currentState = 'idle'; // idle | analyzing | filling | done | error
 
+  // Track original field values for undo support
+  const originalValues = new Map(); // selector -> { originalValue, label, value, confidence, action }
+  let overlayMode = 'status'; // status | compact | expanded
+
   // ─── Utilities ──────────────────────────────────────────────
 
   function sleep(ms) {
@@ -1013,7 +1017,7 @@
 
   // ─── Field filling (main) ──────────────────────────────────
 
-  async function fillField(selector, value, action) {
+  async function fillField(selector, value, action, confidence, label) {
     try {
       // Dismiss any stale dropdowns from previous field
       dismissOpenDropdowns();
@@ -1027,6 +1031,18 @@
 
       // Compute field hints once for normalization throughout this fill
       const fieldHints = getFieldHints(el);
+
+      // Capture original value before filling (for undo support)
+      const origVal = el.value || el.textContent?.trim() || '';
+      const fieldLabel = label || findLabel(el) || el.name || el.id || selector;
+      originalValues.set(selector, {
+        originalValue: origVal,
+        label: fieldLabel,
+        value: String(value),
+        confidence: confidence || 1,
+        action,
+        undone: false,
+      });
 
       // Scroll element into view so it's interactable
       try {
@@ -1209,7 +1225,7 @@
         let result;
         try {
           result = await withTimeout(
-            fillField(mapping.selector, mapping.value, mapping.action),
+            fillField(mapping.selector, mapping.value, mapping.action, mapping.confidence, mapping.label),
             FIELD_TIMEOUT_MS,
             `filling ${mapping.selector}`
           );
@@ -1267,6 +1283,7 @@
   // ─── Overlay UI ───────────────────────────────────────────────
 
   let overlayEl = null;
+  let dragState = null;
 
   function createOverlay() {
     if (overlayEl) return overlayEl;
@@ -1297,16 +1314,215 @@
       body.style.display = body.style.display === 'none' ? 'block' : 'none';
     });
 
+    // Drag support on header
+    const header = overlayEl.querySelector(`.${PREFIX}-overlay-header`);
+    header.addEventListener('mousedown', onDragStart);
+
     return overlayEl;
+  }
+
+  // ─── Drag handling ───────────────────────────────────────────
+
+  function onDragStart(e) {
+    // Don't drag when clicking buttons
+    if (e.target.closest('button')) return;
+    e.preventDefault();
+
+    const rect = overlayEl.getBoundingClientRect();
+    dragState = {
+      startX: e.clientX,
+      startY: e.clientY,
+      origLeft: rect.left,
+      origTop: rect.top,
+    };
+
+    // Switch from bottom/right positioning to top/left for drag
+    overlayEl.style.left = rect.left + 'px';
+    overlayEl.style.top = rect.top + 'px';
+    overlayEl.style.right = 'auto';
+    overlayEl.style.bottom = 'auto';
+
+    document.addEventListener('mousemove', onDragMove);
+    document.addEventListener('mouseup', onDragEnd);
+  }
+
+  function onDragMove(e) {
+    if (!dragState) return;
+    e.preventDefault();
+
+    const dx = e.clientX - dragState.startX;
+    const dy = e.clientY - dragState.startY;
+
+    const newLeft = Math.max(0, Math.min(window.innerWidth - 60, dragState.origLeft + dx));
+    const newTop = Math.max(0, Math.min(window.innerHeight - 40, dragState.origTop + dy));
+
+    overlayEl.style.left = newLeft + 'px';
+    overlayEl.style.top = newTop + 'px';
+  }
+
+  function onDragEnd() {
+    dragState = null;
+    document.removeEventListener('mousemove', onDragMove);
+    document.removeEventListener('mouseup', onDragEnd);
+  }
+
+  // ─── Overlay mode rendering ──────────────────────────────────
+
+  function getOverlayCounts() {
+    let filled = 0;
+    let review = 0;
+    let undone = 0;
+    for (const [, entry] of originalValues) {
+      if (entry.undone) {
+        undone++;
+      } else if (entry.confidence < 0.8) {
+        review++;
+      } else {
+        filled++;
+      }
+    }
+    return { filled, review, undone, total: originalValues.size };
+  }
+
+  function renderCompactPill() {
+    if (!overlayEl) return;
+
+    const { filled, review } = getOverlayCounts();
+    const body = overlayEl.querySelector(`.${PREFIX}-overlay-body`);
+    if (!body) return;
+
+    overlayEl.classList.add(`${PREFIX}-overlay-compact`);
+    overlayEl.classList.remove(`${PREFIX}-overlay-expanded`);
+    overlayMode = 'compact';
+
+    const parts = [];
+    if (filled > 0) parts.push(`${filled} filled`);
+    if (review > 0) parts.push(`${review} review`);
+    if (!parts.length) parts.push('0 fields');
+
+    body.innerHTML = `
+      <div class="${PREFIX}-overlay-pill" title="Click to expand field list">
+        <span class="${PREFIX}-overlay-pill-check">&#x2713;</span>
+        <span class="${PREFIX}-overlay-pill-text">${parts.join(' \u00B7 ')}</span>
+        <span class="${PREFIX}-overlay-pill-expand">&#x25BC;</span>
+      </div>
+    `;
+
+    body.style.display = 'block';
+    body.querySelector(`.${PREFIX}-overlay-pill`).addEventListener('click', () => {
+      renderExpandedList();
+    });
+  }
+
+  function renderExpandedList() {
+    if (!overlayEl) return;
+
+    const body = overlayEl.querySelector(`.${PREFIX}-overlay-body`);
+    if (!body) return;
+
+    overlayEl.classList.remove(`${PREFIX}-overlay-compact`);
+    overlayEl.classList.add(`${PREFIX}-overlay-expanded`);
+    overlayMode = 'expanded';
+
+    const entries = Array.from(originalValues.entries());
+    if (!entries.length) {
+      body.innerHTML = `<span class="${PREFIX}-overlay-status">No fields tracked.</span>`;
+      return;
+    }
+
+    const rows = entries.map(([selector, entry]) => {
+      const dotClass = entry.undone ? 'gray' : (entry.confidence < 0.8 ? 'yellow' : 'green');
+      const displayValue = entry.undone ? `(undone) ${entry.originalValue || 'empty'}` : entry.value;
+      const truncatedValue = displayValue.length > 50 ? displayValue.slice(0, 47) + '...' : displayValue;
+      const truncatedLabel = entry.label.length > 30 ? entry.label.slice(0, 27) + '...' : entry.label;
+      const undoBtnHtml = entry.undone
+        ? ''
+        : `<button class="${PREFIX}-undo-btn" data-selector="${escapeHtml(selector)}" title="Undo">&#x21A9;</button>`;
+
+      return `
+        <div class="${PREFIX}-overlay-field-row" data-selector="${escapeHtml(selector)}">
+          <span class="${PREFIX}-status-dot ${dotClass}"></span>
+          <div class="${PREFIX}-overlay-field-info">
+            <span class="${PREFIX}-overlay-field-label">${escapeHtml(truncatedLabel)}</span>
+            <span class="${PREFIX}-overlay-field-value">${escapeHtml(truncatedValue)}</span>
+          </div>
+          ${undoBtnHtml}
+        </div>
+      `;
+    }).join('');
+
+    body.innerHTML = `
+      <div class="${PREFIX}-overlay-field-list">
+        ${rows}
+      </div>
+      <div class="${PREFIX}-overlay-collapse" title="Click to collapse">
+        <span>&#x25B2; Collapse</span>
+      </div>
+    `;
+
+    body.style.display = 'block';
+
+    // Undo button handlers
+    body.querySelectorAll(`.${PREFIX}-undo-btn`).forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        undoField(btn.dataset.selector);
+      });
+    });
+
+    // Collapse handler
+    body.querySelector(`.${PREFIX}-overlay-collapse`).addEventListener('click', () => {
+      renderCompactPill();
+    });
+  }
+
+  function undoField(selector) {
+    const entry = originalValues.get(selector);
+    if (!entry || entry.undone) return;
+
+    const el = resolveElement(selector);
+    if (!el) return;
+
+    // Restore original value
+    setNativeValue(el, entry.originalValue);
+    dispatchEvents(el, ['input', 'change']);
+
+    // Remove highlight classes
+    el.classList.remove(`${PREFIX}-filled`);
+    el.classList.remove(`${PREFIX}-review`);
+
+    entry.undone = true;
+
+    // Re-render the current overlay mode
+    if (overlayMode === 'expanded') {
+      renderExpandedList();
+    } else if (overlayMode === 'compact') {
+      renderCompactPill();
+    }
   }
 
   function updateOverlay(state, message) {
     const overlay = createOverlay();
-    const statusEl = overlay.querySelector(`.${PREFIX}-overlay-status`);
-    if (statusEl) {
-      statusEl.textContent = message || state;
-    }
     currentState = state;
+
+    // During active operations (analyzing, filling, error), show status text
+    if (state === 'done' && originalValues.size > 0) {
+      // Switch to compact pill when fill is complete
+      overlayMode = 'compact';
+      renderCompactPill();
+      return;
+    }
+
+    // Status mode: show text message
+    overlayEl.classList.remove(`${PREFIX}-overlay-compact`);
+    overlayEl.classList.remove(`${PREFIX}-overlay-expanded`);
+    overlayMode = 'status';
+
+    const body = overlay.querySelector(`.${PREFIX}-overlay-body`);
+    if (body) {
+      body.style.display = 'block';
+      body.innerHTML = `<span class="${PREFIX}-overlay-status">${escapeHtml(message || state)}</span>`;
+    }
   }
 
   function showOverlay(status) {
@@ -1318,6 +1534,10 @@
       overlayEl.remove();
       overlayEl = null;
     }
+    // Clean up drag listeners
+    document.removeEventListener('mousemove', onDragMove);
+    document.removeEventListener('mouseup', onDragEnd);
+    dragState = null;
   }
 
   // ─── Learn prompt (post-submission) ───────────────────────────
@@ -1735,6 +1955,8 @@
       showBadge,
       removeBadge,
       tryShowBadge,
+      undoField,
+      originalValues,
     };
   }
 

@@ -17,6 +17,19 @@
   z-index: 999999;
   box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
   overflow: hidden;
+  transition: width 0.2s ease;
+}
+
+/* Compact pill: shrink width to fit summary text */
+#cp-autofill-overlay.cp-autofill-overlay-compact {
+  width: auto;
+  min-width: 180px;
+  max-width: 280px;
+}
+
+/* Expanded panel: widen for the field list */
+#cp-autofill-overlay.cp-autofill-overlay-expanded {
+  width: 320px;
 }
 
 .cp-autofill-overlay-header {
@@ -26,6 +39,12 @@
   padding: 10px 14px;
   background: rgba(59, 130, 246, 0.15);
   border-bottom: 1px solid #3f3f46;
+  cursor: grab;
+  user-select: none;
+}
+
+.cp-autofill-overlay-header:active {
+  cursor: grabbing;
 }
 
 .cp-autofill-overlay-title {
@@ -64,6 +83,143 @@
 .cp-autofill-overlay-status {
   color: #a1a1aa;
   line-height: 1.4;
+}
+
+/* ─── Compact pill ──────────────────────────────────────── */
+
+.cp-autofill-overlay-pill {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.cp-autofill-overlay-pill:hover {
+  opacity: 0.85;
+}
+
+.cp-autofill-overlay-pill-check {
+  color: #22c55e;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.cp-autofill-overlay-pill-text {
+  color: #d4d4d8;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.cp-autofill-overlay-pill-expand {
+  color: #71717a;
+  font-size: 10px;
+  margin-left: auto;
+}
+
+/* ─── Expanded field list ───────────────────────────────── */
+
+.cp-autofill-overlay-field-list {
+  max-height: 260px;
+  overflow-y: auto;
+  margin: 0 -14px;
+  padding: 0 14px;
+}
+
+.cp-autofill-overlay-field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-bottom: 1px solid #27272a;
+  position: relative;
+}
+
+.cp-autofill-overlay-field-row:last-child {
+  border-bottom: none;
+}
+
+.cp-autofill-overlay-field-info {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  flex: 1;
+}
+
+.cp-autofill-overlay-field-label {
+  font-size: 11px;
+  color: #a1a1aa;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cp-autofill-overlay-field-value {
+  font-size: 12px;
+  color: #e4e4e7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ─── Status dots ───────────────────────────────────────── */
+
+.cp-autofill-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.cp-autofill-status-dot.green {
+  background: #22c55e;
+}
+
+.cp-autofill-status-dot.yellow {
+  background: #eab308;
+}
+
+.cp-autofill-status-dot.gray {
+  background: #71717a;
+}
+
+/* ─── Undo button ───────────────────────────────────────── */
+
+.cp-autofill-undo-btn {
+  background: none;
+  border: none;
+  color: #71717a;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  flex-shrink: 0;
+}
+
+.cp-autofill-overlay-field-row:hover .cp-autofill-undo-btn {
+  opacity: 1;
+}
+
+.cp-autofill-undo-btn:hover {
+  background: #27272a;
+  color: #f87171;
+}
+
+/* ─── Collapse link ─────────────────────────────────────── */
+
+.cp-autofill-overlay-collapse {
+  text-align: center;
+  padding: 6px 0 2px;
+  cursor: pointer;
+  color: #71717a;
+  font-size: 11px;
+}
+
+.cp-autofill-overlay-collapse:hover {
+  color: #a1a1aa;
 }
 
 /* ─── Field highlights ───────────────────────────────────── */
