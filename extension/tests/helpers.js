@@ -10,8 +10,18 @@ export function loadContentScript() {
   // For vitest, we load and execute the IIFE directly.
 }
 
+// Create a <form> wrapper and return it
+export function createForm(attrs = {}) {
+  const form = document.createElement('form');
+  Object.entries(attrs).forEach(([key, val]) => {
+    form.setAttribute(key, val);
+  });
+  document.body.appendChild(form);
+  return form;
+}
+
 // Create a mock form field
-export function createInput(attrs = {}) {
+export function createInput(attrs = {}, parent = null) {
   const input = document.createElement('input');
   Object.entries(attrs).forEach(([key, val]) => {
     if (key === 'type' || key === 'name' || key === 'id' || key === 'placeholder' || key === 'value') {
@@ -20,7 +30,7 @@ export function createInput(attrs = {}) {
       input.setAttribute(key, val);
     }
   });
-  document.body.appendChild(input);
+  (parent || document.body).appendChild(input);
   return input;
 }
 

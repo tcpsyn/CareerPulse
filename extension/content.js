@@ -2091,26 +2091,35 @@
       }
     }
 
-    // Form field signals — require job-specific fields, not just generic contact fields
+    // Form field signals — require job-specific fields within actual forms
     if (confidence !== 'high') {
-      const inputs = document.querySelectorAll('input, select, textarea, [role="textbox"]');
+      // Only consider fields inside <form> elements or known ATS containers
+      const forms = document.querySelectorAll('form, [role="form"], [data-testid*="application"], .application-form');
+      if (forms.length === 0) return 'none';
 
-      // Negative signals: password fields indicate login/registration, not job apps
-      let hasPassword = false;
+      const inputs = document.querySelectorAll('form input, form select, form textarea, form [role="textbox"], [role="form"] input, [role="form"] select, [role="form"] textarea');
+      if (inputs.length === 0) return 'none';
+
+      // Negative signals: password fields indicate login/registration
       for (const el of inputs) {
-        if (el.type === 'password') { hasPassword = true; break; }
+        if (el.type === 'password') return 'none';
       }
-      if (hasPassword) return 'none';
 
-      // Job-specific signals (strong indicators of a job application)
-      const jobSpecificPatterns = /resume|cv[\b\s_-]|cover.?letter|work.?auth|visa.?status|salary.?expect|desired.?salary|years?.?of?.?experience|work.?experience|education|linkedin|portfolio|how.?did.?you.?hear|referral|start.?date|willing.?to.?relocate|security.?clearance|equal.?opportunity|eeo|veteran|disability.?status|race|ethnicity|gender/i;
-      // Generic contact fields (common in both job apps and other forms)
+      // Negative signals: search forms
+      for (const form of forms) {
+        if (form.getAttribute('role') === 'search' || form.action?.includes('search')) return 'none';
+      }
+
+      // Job-specific signals — fields that only appear on job applications
+      const jobSpecificPatterns = /resum[eé]|cv[\b\s_\-.]upload|cover.?letter|work.?auth|visa.?status|salary.?expect|desired.?salary|years?.?of?.?experience|how.?did.?you.?(hear|find)|willing.?to.?relocate|security.?clearance|equal.?opportunity|eeo\b|start.?date|available.?start/i;
+      // Generic contact fields
       const genericPatterns = /first.?name|last.?name|email|phone|address|city|state|zip/i;
 
       let jobSignals = 0;
       let genericSignals = 0;
 
       for (const el of inputs) {
+        if (el.type === 'hidden' || el.type === 'submit' || el.type === 'button') continue;
         const name = el.name || '';
         const id = el.id || '';
         const label = findLabel(el);
@@ -2123,17 +2132,17 @@
           genericSignals++;
         }
 
-        if (el.type === 'file' && /resume|cv/i.test(combined)) {
+        // Resume/CV file upload is a very strong signal
+        if (el.type === 'file' && /resum[eé]|cv[\b\s_\-.]|upload.?cv/i.test(combined)) {
           jobSignals += 2;
         }
       }
 
-      // Also check page context for job-related keywords
-      const pageText = document.title + ' ' + (document.querySelector('h1')?.textContent || '');
-      const jobPagePattern = /apply|application|job.?application|career|position|opening|submit.?your|join.?our.?team|we.?are.?hiring/i;
-      const titleMatch = jobPagePattern.test(pageText);
+      // Page title must contain job-application-specific terms (not just "career")
+      const pageText = document.title;
+      const titleMatch = /\bapply\b|application.?form|job.?application|submit.?your.?application/i.test(pageText);
 
-      // Require at least one job-specific signal
+      // Require strong job-specific evidence
       if (jobSignals >= 2) {
         confidence = 'high';
       } else if (jobSignals >= 1 && genericSignals >= 2) {
