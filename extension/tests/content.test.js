@@ -1011,17 +1011,37 @@ describe('edge cases', () => {
 // ═══════════════════════════════════════════════════════════════
 
 describe('detectApplicationForm', () => {
-  it('returns high confidence when 3+ field signals present', () => {
+  it('returns none for generic contact forms without job-specific fields', () => {
     createInput({ type: 'text', name: 'firstName', id: 'firstName' });
     createInput({ type: 'text', name: 'lastName', id: 'lastName' });
     createInput({ type: 'email', name: 'email', id: 'email' });
 
     const confidence = api.detectApplicationForm();
+    expect(confidence).toBe('none');
+  });
+
+  it('returns high confidence with job-specific fields plus generic fields', () => {
+    createInput({ type: 'text', name: 'firstName', id: 'firstName' });
+    createInput({ type: 'text', name: 'lastName', id: 'lastName' });
+    createInput({ type: 'email', name: 'email', id: 'email' });
+    createInput({ type: 'text', name: 'linkedin', id: 'linkedin' });
+
+    const confidence = api.detectApplicationForm();
     expect(confidence).toBe('high');
   });
 
-  it('returns medium confidence with 1 field signal and application title', () => {
+  it('returns medium confidence with generic fields and application title', () => {
+    createInput({ type: 'text', name: 'firstName', id: 'firstName' });
+    createInput({ type: 'text', name: 'lastName', id: 'lastName' });
     createInput({ type: 'email', name: 'email', id: 'email' });
+    document.title = 'Apply for Software Engineer';
+
+    const confidence = api.detectApplicationForm();
+    expect(confidence).toBe('medium');
+  });
+
+  it('returns medium confidence with 1 job-specific field and application title', () => {
+    createInput({ type: 'text', name: 'yearsOfExperience', id: 'yearsOfExperience' });
     document.title = 'Apply for Software Engineer';
 
     const confidence = api.detectApplicationForm();
@@ -1035,7 +1055,16 @@ describe('detectApplicationForm', () => {
     expect(confidence).toBe('none');
   });
 
-  it('counts resume file input as a field signal', () => {
+  it('returns none for login forms with password fields', () => {
+    createInput({ type: 'email', name: 'email', id: 'email' });
+    createInput({ type: 'password', name: 'password', id: 'password' });
+    createInput({ type: 'text', name: 'linkedin', id: 'linkedin' });
+
+    const confidence = api.detectApplicationForm();
+    expect(confidence).toBe('none');
+  });
+
+  it('counts resume file input as a strong job signal', () => {
     createInput({ type: 'text', name: 'firstName', id: 'firstName' });
     createInput({ type: 'text', name: 'lastName', id: 'lastName' });
     createInput({ type: 'file', name: 'resume', id: 'resume' });
@@ -1044,10 +1073,9 @@ describe('detectApplicationForm', () => {
     expect(confidence).toBe('high');
   });
 
-  it('detects phone as a field signal', () => {
-    createInput({ type: 'text', name: 'firstName', id: 'firstName' });
-    createInput({ type: 'text', name: 'lastName', id: 'lastName' });
-    createInput({ type: 'tel', name: 'phone', id: 'phone' });
+  it('returns high confidence with 2+ job-specific fields', () => {
+    createInput({ type: 'text', name: 'coverLetter', id: 'coverLetter' });
+    createInput({ type: 'text', name: 'salaryExpectation', id: 'salaryExpectation' });
 
     const confidence = api.detectApplicationForm();
     expect(confidence).toBe('high');

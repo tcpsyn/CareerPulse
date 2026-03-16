@@ -2091,12 +2091,25 @@
       }
     }
 
-    // Form field signals
+    // Form field signals — require job-specific fields, not just generic contact fields
     if (confidence !== 'high') {
-      const fieldPatterns = /first.?name|last.?name|email|phone|resume/i;
-      let fieldMatches = 0;
-
       const inputs = document.querySelectorAll('input, select, textarea, [role="textbox"]');
+
+      // Negative signals: password fields indicate login/registration, not job apps
+      let hasPassword = false;
+      for (const el of inputs) {
+        if (el.type === 'password') { hasPassword = true; break; }
+      }
+      if (hasPassword) return 'none';
+
+      // Job-specific signals (strong indicators of a job application)
+      const jobSpecificPatterns = /resume|cv[\b\s_-]|cover.?letter|work.?auth|visa.?status|salary.?expect|desired.?salary|years?.?of?.?experience|work.?experience|education|linkedin|portfolio|how.?did.?you.?hear|referral|start.?date|willing.?to.?relocate|security.?clearance|equal.?opportunity|eeo|veteran|disability.?status|race|ethnicity|gender/i;
+      // Generic contact fields (common in both job apps and other forms)
+      const genericPatterns = /first.?name|last.?name|email|phone|address|city|state|zip/i;
+
+      let jobSignals = 0;
+      let genericSignals = 0;
+
       for (const el of inputs) {
         const name = el.name || '';
         const id = el.id || '';
@@ -2104,21 +2117,30 @@
         const placeholder = el.placeholder || '';
         const combined = `${name} ${id} ${label} ${placeholder}`;
 
-        if (fieldPatterns.test(combined)) {
-          fieldMatches++;
+        if (jobSpecificPatterns.test(combined)) {
+          jobSignals++;
+        } else if (genericPatterns.test(combined)) {
+          genericSignals++;
         }
 
-        // Resume file input
         if (el.type === 'file' && /resume|cv/i.test(combined)) {
-          fieldMatches++;
+          jobSignals += 2;
         }
       }
 
-      const titleMatch = /apply|application|job.application/i.test(document.title);
+      // Also check page context for job-related keywords
+      const pageText = document.title + ' ' + (document.querySelector('h1')?.textContent || '');
+      const jobPagePattern = /apply|application|job.?application|career|position|opening|submit.?your|join.?our.?team|we.?are.?hiring/i;
+      const titleMatch = jobPagePattern.test(pageText);
 
-      if (fieldMatches >= 3) {
+      // Require at least one job-specific signal
+      if (jobSignals >= 2) {
         confidence = 'high';
-      } else if (fieldMatches >= 1 && titleMatch) {
+      } else if (jobSignals >= 1 && genericSignals >= 2) {
+        confidence = 'high';
+      } else if (jobSignals >= 1 && titleMatch) {
+        confidence = 'medium';
+      } else if (genericSignals >= 3 && titleMatch) {
         confidence = 'medium';
       }
     }

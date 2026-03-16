@@ -44,6 +44,7 @@ Self-hosted job discovery and application tool. Scrapes jobs from multiple board
 - **Networking contact CRM** — Track contacts, interactions, and referrals linked to jobs
 - **Career trajectory intelligence** — AI suggests stretch and pivot roles based on your career arc
 - **Offer comparison calculator** — Total compensation analysis with cost-of-living normalization
+- **Salary calculator** — W2/1099/C2C take-home comparison with federal + state tax estimation, animated Chart.js visualizations
 - **Intelligent queue orchestration** — Extension auto-fills queued applications sequentially; never auto-submits
 - **Custom Q&A autofill** — Extension fills skipped fields using your Q&A bank with fuzzy matching
 
@@ -156,6 +157,7 @@ FastAPI (async)
 │   ├── CareerAdvisor (trajectory + role suggestions)
 │   ├── OfferCalculator (total comp + cost-of-living)
 │   └── FollowUp (email drafting + auto-send)
+├── SalaryCalculator (W2/1099/C2C + state taxes, client-side)
 ├── ContactCRM (contacts, interactions, referrals)
 ├── ApplicationQueue (batch prep + approval workflow)
 ├── APScheduler (periodic scraping + alerts)
@@ -341,7 +343,7 @@ pytest
 
 370 tests covering scrapers, database, API endpoints, matcher, tailor, resume analyzer, AI client, contact finder, apply link finder, salary estimator, company research, digest, profile CRUD, autofill, custom Q&A, saved views, response tracking, alerts, application queue, follow-up templates, contacts CRM, career advisor, offers, and predictions.
 
-The Chrome extension has a separate test suite (295 tests) using Vitest:
+The Chrome extension has a separate test suite (298 tests) using Vitest:
 
 ```bash
 cd extension && pnpm test

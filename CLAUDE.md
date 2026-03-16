@@ -32,6 +32,8 @@ docker compose up -d
 - `app/predictor.py` — application success prediction
 - `app/career_advisor.py` — career trajectory AI analysis
 - `app/offer_calculator.py` — offer comparison with cost-of-living normalization
+- `app/static/js/salary-calculator.js` — client-side salary calculator (W2/1099/C2C, tax estimation by state, Chart.js visualizations)
+- `app/static/js/tax-data.js` — 2025 federal + all 50 state tax brackets and FICA rates
 - `extension/` — Chrome extension (Manifest V3): autofill, job board overlays, queue orchestration
 
 ## Environment Variables
@@ -44,7 +46,7 @@ Required in `.env`:
 ## Testing
 ```bash
 uv run pytest                        # 370 backend tests
-cd extension && npx vitest run       # 295 extension tests
+cd extension && npx vitest run       # 298 extension tests
 ```
 
 ## Git Remote
