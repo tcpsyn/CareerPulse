@@ -234,8 +234,8 @@ def _deterministic_fill(fields: list[dict], profile: dict) -> tuple[list[dict], 
         (r"\baddress[\s_-]?line[\s_-]?2\b|\bapt\b|\bsuite\b|\baddress[\s_-]?2\b", profile.get("address_street2", ""), "fill_text"),
         (r"\bcity\b|\btown\b", profile.get("address_city", ""), "fill_text"),
         (r"\bpostal[\s_-]?code\b|\bzip[\s_-]?code\b|\bzip\b|\bpostcode\b", profile.get("address_zip", ""), "fill_text"),
-        # State - handle as dropdown or text
-        (r"\bstate\b|\bprovince\b|\bregion\b", profile.get("address_state", ""), None),  # action determined below
+        # State - always treat as dropdown
+        (r"\bstate\b|\bprovince\b|\bregion\b", profile.get("address_state", ""), "select_dropdown"),
         # Country
         (r"\bcountry\b", profile.get("address_country_name", "United States"), None),
         # URLs
@@ -324,10 +324,27 @@ def _deterministic_fill(fields: list[dict], profile: dict) -> tuple[list[dict], 
     return mappings, remaining
 
 
+_US_STATE_ABBREVS = {
+    "alabama": "AL", "alaska": "AK", "arizona": "AZ", "arkansas": "AR",
+    "california": "CA", "colorado": "CO", "connecticut": "CT", "delaware": "DE",
+    "florida": "FL", "georgia": "GA", "hawaii": "HI", "idaho": "ID",
+    "illinois": "IL", "indiana": "IN", "iowa": "IA", "kansas": "KS",
+    "kentucky": "KY", "louisiana": "LA", "maine": "ME", "maryland": "MD",
+    "massachusetts": "MA", "michigan": "MI", "minnesota": "MN", "mississippi": "MS",
+    "missouri": "MO", "montana": "MT", "nebraska": "NE", "nevada": "NV",
+    "new hampshire": "NH", "new jersey": "NJ", "new mexico": "NM", "new york": "NY",
+    "north carolina": "NC", "north dakota": "ND", "ohio": "OH", "oklahoma": "OK",
+    "oregon": "OR", "pennsylvania": "PA", "rhode island": "RI", "south carolina": "SC",
+    "south dakota": "SD", "tennessee": "TN", "texas": "TX", "utah": "UT",
+    "vermont": "VT", "virginia": "VA", "washington": "WA", "west virginia": "WV",
+    "wisconsin": "WI", "wyoming": "WY", "district of columbia": "DC",
+}
+_US_ABBREV_TO_STATE = {v: k for k, v in _US_STATE_ABBREVS.items()}
+
+
 def _match_option(value: str, options) -> str | None:
     """Find the best matching option for a value in a dropdown."""
     value_lower = value.lower().strip()
-    # options can be a list of strings or list of dicts with value/text
     option_strs = []
     for opt in options:
         if isinstance(opt, dict):
@@ -339,10 +356,25 @@ def _match_option(value: str, options) -> str | None:
     for opt in option_strs:
         if opt.lower().strip() == value_lower:
             return opt
+
+    # State abbreviation matching (e.g., "New Mexico" matches "NM" or vice versa)
+    abbrev = _US_STATE_ABBREVS.get(value_lower, "")
+    full_name = _US_ABBREV_TO_STATE.get(value_lower.upper(), "")
+    for opt in option_strs:
+        opt_lower = opt.lower().strip()
+        if abbrev and opt_lower == abbrev.lower():
+            return opt
+        if full_name and opt_lower == full_name:
+            return opt
+        # Match "NM - New Mexico" or "New Mexico (NM)" patterns
+        if abbrev and abbrev.lower() in opt_lower and value_lower in opt_lower:
+            return opt
+
     # Contains match
     for opt in option_strs:
         if value_lower in opt.lower() or opt.lower() in value_lower:
             return opt
+
     return None
 
 
