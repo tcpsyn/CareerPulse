@@ -641,6 +641,8 @@
   function getDropdownOptions(dropdownEl) {
     const optionSelectors = [
       '[role="option"]',
+      '[data-automation-id="promptOption"]',
+      '[data-automation-id="menuItem"]',
       'li:not([role="presentation"])',
       '[class*="option"]',
       '[class*="item"]:not([class*="menu-item"])',
@@ -785,7 +787,8 @@
     }
 
     // Try typing to filter first (for searchable dropdowns)
-    const searchInput = dd.querySelector('input') || el.querySelector('input');
+    // Workday uses [data-automation-id="searchBox"] for dropdown search inputs
+    const searchInput = dd.querySelector('[data-automation-id="searchBox"]') || dd.querySelector('input') || el.querySelector('input');
     if (searchInput) {
       searchInput.focus();
       setNativeValue(searchInput, value);
