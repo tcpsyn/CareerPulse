@@ -8,14 +8,21 @@ async function getServerUrl() {
 async function apiFetch(path, options = {}) {
   const base = await getServerUrl();
   const url = `${base}${path}`;
-  const resp = await fetch(url, {
-    headers: { 'Content-Type': 'application/json', ...options.headers },
-    ...options,
-  });
-  if (!resp.ok) {
-    throw new Error(`API ${resp.status}: ${resp.statusText}`);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 50000);
+  try {
+    const resp = await fetch(url, {
+      headers: { 'Content-Type': 'application/json', ...options.headers },
+      ...options,
+      signal: controller.signal,
+    });
+    if (!resp.ok) {
+      throw new Error(`API ${resp.status}: ${resp.statusText}`);
+    }
+    return resp;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return resp;
 }
 
 async function checkConnection() {

@@ -1626,3 +1626,152 @@ describe('autoTrackApplied', () => {
     expect(toast).toBeNull();
   });
 });
+
+// ═══════════════════════════════════════════════════════════════
+// Timeout configuration
+// ═══════════════════════════════════════════════════════════════
+
+describe('timeout configuration', () => {
+  it('API_TIMEOUT_MS should be 60000ms (60s) to allow margin for AI analysis', () => {
+    expect(api.API_TIMEOUT_MS).toBe(60000);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// fillForm iteration limit
+// ═══════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════
+// startFillFlow overall timeout
+// ═══════════════════════════════════════════════════════════════
+
+describe('startFillFlow overall timeout', () => {
+  it('shows timeout error in overlay when flow exceeds 90 seconds', async () => {
+    // Strategy: analyzeForm resolves slowly (55s), then getNewMappings hangs.
+    // Without an overall 90s timeout, the flow would be stuck until getNewMappings'
+    // own 60s per-API timeout at 115s total. The overall timeout should fire at 90s,
+    // showing a user-friendly error before the per-API timeout triggers.
+
+    let callCount = 0;
+    globalThis.chrome.runtime.sendMessage = vi.fn().mockImplementation(() => {
+      callCount++;
+      if (callCount === 1) {
+        // analyzeForm: resolves after 55s
+        return new Promise(resolve => {
+          setTimeout(() => resolve({
+            ok: true,
+            data: {
+              mappings: [
+                { selector: '#f1', value: 'test', action: 'fill_text', confidence: 0.9 },
+              ],
+            },
+          }), 55000);
+        });
+      }
+      // getNewMappings: hang forever (per-API timeout won't fire until 60s later = 115s total)
+      return new Promise(() => {});
+    });
+
+    const form = createForm();
+    const input = createInput({ id: 'f1', type: 'text', name: 'first_name' }, form);
+
+    // Add dynamic field after fill to trigger iteration 1 (which calls getNewMappings)
+    input.addEventListener('input', () => {
+      if (!document.getElementById('dyn-1')) {
+        createInput({ id: 'dyn-1', type: 'text', name: 'dynamic' }, form);
+      }
+    });
+
+    // Start the flow (don't await — it will hang without overall timeout)
+    api.startFillFlow();
+
+    // Advance to 56s: analyzeForm resolves, fill begins
+    await vi.advanceTimersByTimeAsync(56000);
+    // Allow microtasks (fill, dynamic field detection) to settle
+    await vi.advanceTimersByTimeAsync(2000);
+    // Advance to 91s total: overall timeout should fire
+    await vi.advanceTimersByTimeAsync(33000);
+
+    // Check the overlay — at 91s, the overall timeout should have fired
+    const overlay = document.getElementById('cp-autofill-overlay');
+    expect(overlay).not.toBeNull();
+    const statusEl = overlay.querySelector('.cp-autofill-overlay-status');
+    expect(statusEl.textContent).toMatch(/timed?\s*out|too long/i);
+  }, 15000);
+});
+
+// ═══════════════════════════════════════════════════════════════
+// getNewMappings error logging
+// ═══════════════════════════════════════════════════════════════
+
+describe('getNewMappings error logging', () => {
+  it('logs a console warning when re-analysis fails', async () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    // Make sendMessage reject (simulating a timeout or network error)
+    globalThis.chrome.runtime.sendMessage = vi.fn().mockRejectedValue(
+      new Error('API form analysis timed out after 60000ms')
+    );
+
+    const result = await api.getNewMappings();
+
+    expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalled();
+    expect(warnSpy.mock.calls[0][0]).toMatch(/re-analysis|getNewMappings|failed/i);
+
+    warnSpy.mockRestore();
+  });
+});
+
+describe('fillForm iteration limit', () => {
+  it('iterates at most 2 times (not 5)', async () => {
+    // Track how many times getNewMappings is called (called on iterations > 0)
+    let reAnalyzeCount = 0;
+    let dynamicFieldId = 0;
+
+    // After each fill, add a new empty field to simulate dynamic form expansion
+    // This forces the loop to keep iterating (new unmapped fields appear)
+    const origFillField = api.fillField;
+
+    // Mock sendMessage to return new mappings for dynamically appearing fields
+    globalThis.chrome.runtime.sendMessage = vi.fn().mockImplementation(() => {
+      reAnalyzeCount++;
+      const id = `dynamic-${reAnalyzeCount}`;
+      return Promise.resolve({
+        ok: true,
+        data: {
+          mappings: [
+            { selector: `#${id}`, value: `val-${reAnalyzeCount}`, action: 'fill_text', confidence: 0.9 },
+          ],
+        },
+      });
+    });
+
+    // Create initial field
+    createInput({ id: 'f1', type: 'text' });
+
+    // Hook into the 500ms sleep between iterations to inject new fields
+    // We do this by adding a MutationObserver-like behavior: after each fill, add new fields
+    const originalSleep = globalThis.setTimeout;
+    let fillCallCount = 0;
+
+    // Use an event listener on input to add new dynamic fields after each fill
+    document.body.addEventListener('input', () => {
+      fillCallCount++;
+      const newId = `dynamic-${fillCallCount}`;
+      if (!document.getElementById(newId)) {
+        createInput({ id: newId, type: 'text', name: newId });
+      }
+    });
+
+    const mappings = [
+      { selector: '#f1', value: 'initial', action: 'fill_text', confidence: 0.9 },
+    ];
+
+    const result = await api.fillForm(mappings);
+
+    // With max 2 iterations (0 and 1), getNewMappings is called at most 1 time
+    // With max 5 iterations, it would be called up to 4 times
+    expect(reAnalyzeCount).toBeLessThanOrEqual(1);
+  });
+});

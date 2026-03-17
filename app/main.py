@@ -17,6 +17,8 @@ from app.ai_client import AIClient
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+AUTOFILL_ANALYZE_TIMEOUT = 45
+
 
 def _build_ai_client(ai_settings: dict | None, env_key: str = "") -> AIClient | None:
     """Build an AIClient from DB settings or env fallback."""
@@ -2054,13 +2056,19 @@ Rank by ROI (jobs unlocked relative to learning difficulty). Return top 5 skills
         )
 
         try:
-            response = await client.chat(prompt, max_tokens=4000)
+            response = await asyncio.wait_for(
+                client.chat(prompt, max_tokens=4000),
+                timeout=AUTOFILL_ANALYZE_TIMEOUT,
+            )
             text = response.strip()
             if text.startswith("```"):
                 text = text.split("\n", 1)[1] if "\n" in text else text[3:]
                 text = text.rsplit("```", 1)[0]
             mappings = json.loads(text)
             return {"mappings": mappings}
+        except asyncio.TimeoutError:
+            logger.warning("Autofill analyze timed out after %ds", AUTOFILL_ANALYZE_TIMEOUT)
+            return {"mappings": [], "error": f"AI analysis timed out after {AUTOFILL_ANALYZE_TIMEOUT}s"}
         except json.JSONDecodeError:
             return {"mappings": [], "error": "Failed to parse AI response"}
         except Exception as e:

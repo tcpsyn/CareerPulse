@@ -8,7 +8,7 @@
   const PREFIX = 'cp-autofill';
   const OVERLAY_PREFIX = 'cp-overlay';
   const FIELD_TIMEOUT_MS = 8000;  // Max time per field fill
-  const API_TIMEOUT_MS = 30000;   // Max time for API analyze call
+  const API_TIMEOUT_MS = 60000;   // Max time for API analyze call
   const SCAN_DEBOUNCE_MS = 1500;  // Debounce for MutationObserver re-scans
   let currentState = 'idle'; // idle | analyzing | filling | done | error
 
@@ -1356,7 +1356,7 @@
     const failedSelectors = new Set();
     const atsFormRoot = atsAdapter?.getFormRoot?.(document) || null;
 
-    for (let iteration = 0; iteration < 5; iteration++) {
+    for (let iteration = 0; iteration < 2; iteration++) {
       const currentMappings = iteration === 0 ? mappings : await getNewMappings();
       if (!currentMappings || !currentMappings.length) break;
 
@@ -1421,7 +1421,9 @@
       if (response && response.ok && response.data?.mappings) {
         return response.data.mappings;
       }
-    } catch { /* skip */ }
+    } catch (err) {
+      console.warn('[CareerPulse] Re-analysis failed:', err?.message || err);
+    }
     return null;
   }
 
@@ -1973,6 +1975,8 @@
 
   // ─── Main fill flow ──────────────────────────────────────────
 
+  const OVERALL_TIMEOUT_MS = 90000; // Max time for entire fill flow
+
   async function startFillFlow() {
     try {
       // Remove the auto-detection badge if present
@@ -1991,80 +1995,86 @@
         showOverlay('Analyzing form...');
       }
 
-      preSubmitValues = captureFormValues();
+      await withTimeout((async () => {
+        preSubmitValues = captureFormValues();
 
-      // Use ATS adapter's form root if available
-      const formRoot = atsAdapter?.getFormRoot?.(document) || null;
+        // Use ATS adapter's form root if available
+        const formRoot = atsAdapter?.getFormRoot?.(document) || null;
 
-      const formHtml = serializeFormHtml();
+        const formHtml = serializeFormHtml();
 
-      // If adapter provides extra field extraction (e.g. Google Forms), merge them
-      let adapterFields = [];
-      if (atsAdapter?.getExtraFields) {
-        try {
-          adapterFields = atsAdapter.getExtraFields(document);
-        } catch { /* skip */ }
-      }
-
-      // Include ATS metadata in the analysis request
-      const analyzePayload = { type: 'analyzeForm', formHtml };
-      if (atsAdapter) {
-        analyzePayload.atsName = atsAdapter.name;
-        analyzePayload.atsFieldMap = atsAdapter.getFieldMap?.() || {};
-        if (adapterFields.length) {
-          analyzePayload.adapterFields = adapterFields;
+        // If adapter provides extra field extraction (e.g. Google Forms), merge them
+        let adapterFields = [];
+        if (atsAdapter?.getExtraFields) {
+          try {
+            adapterFields = atsAdapter.getExtraFields(document);
+          } catch { /* skip */ }
         }
-      }
 
-      let response;
-      try {
-        response = await withTimeout(
-          chrome.runtime.sendMessage(analyzePayload),
-          API_TIMEOUT_MS,
-          'Form analysis'
-        );
-      } catch (err) {
-        updateOverlay('error', `Timed out analyzing form. Is the server running?`);
-        return;
-      }
+        // Include ATS metadata in the analysis request
+        const analyzePayload = { type: 'analyzeForm', formHtml };
+        if (atsAdapter) {
+          analyzePayload.atsName = atsAdapter.name;
+          analyzePayload.atsFieldMap = atsAdapter.getFieldMap?.() || {};
+          if (adapterFields.length) {
+            analyzePayload.adapterFields = adapterFields;
+          }
+        }
 
-      if (!response || !response.ok) {
-        updateOverlay('error', `Error: ${response?.error || 'Analysis failed'}`);
-        return;
-      }
+        let response;
+        try {
+          response = await withTimeout(
+            chrome.runtime.sendMessage(analyzePayload),
+            API_TIMEOUT_MS,
+            'Form analysis'
+          );
+        } catch (err) {
+          updateOverlay('error', `Timed out analyzing form. Is the server running?`);
+          return;
+        }
 
-      let mappings = response.data?.mappings || [];
-      if (!mappings.length) {
-        updateOverlay('done', 'No fillable fields found');
-        return;
-      }
+        if (!response || !response.ok) {
+          updateOverlay('error', `Error: ${response?.error || 'Analysis failed'}`);
+          return;
+        }
 
-      // Post-process: fill skipped fields that match custom Q&A
-      mappings = await applyCustomQA(mappings);
+        let mappings = response.data?.mappings || [];
+        if (!mappings.length) {
+          updateOverlay('done', 'No fillable fields found');
+          return;
+        }
 
-      currentState = 'filling';
-      const result = await fillForm(mappings, atsAdapter);
+        // Post-process: fill skipped fields that match custom Q&A
+        mappings = await applyCustomQA(mappings);
 
-      const failedCount = result.results.filter(r => !r.success).length;
-      let statusMsg = `Filled ${result.filledCount}/${result.total} fields.`;
-      if (failedCount > 0) {
-        statusMsg += ` ${failedCount} field${failedCount > 1 ? 's' : ''} need manual review.`;
-      } else {
-        statusMsg += ' Review highlighted fields.';
-      }
-      updateOverlay('done', statusMsg);
+        currentState = 'filling';
+        const result = await fillForm(mappings, atsAdapter);
 
-      preSubmitValues = captureFormValues();
-      detectSubmission();
+        const failedCount = result.results.filter(r => !r.success).length;
+        let statusMsg = `Filled ${result.filledCount}/${result.total} fields.`;
+        if (failedCount > 0) {
+          statusMsg += ` ${failedCount} field${failedCount > 1 ? 's' : ''} need manual review.`;
+        } else {
+          statusMsg += ' Review highlighted fields.';
+        }
+        updateOverlay('done', statusMsg);
 
-      // Start multi-page tracking or update cumulative progress
-      if (multiPageState && multiPageState.currentPage > 1) {
-        updateMultiPageProgress(result.filledCount);
-      } else {
-        startMultiPageTracking(result.filledCount);
-      }
+        preSubmitValues = captureFormValues();
+        detectSubmission();
+
+        // Start multi-page tracking or update cumulative progress
+        if (multiPageState && multiPageState.currentPage > 1) {
+          updateMultiPageProgress(result.filledCount);
+        } else {
+          startMultiPageTracking(result.filledCount);
+        }
+      })(), OVERALL_TIMEOUT_MS, 'Autofill operation');
     } catch (err) {
-      updateOverlay('error', `Error: ${err.message}`);
+      if (err.message && err.message.includes('timed out')) {
+        updateOverlay('error', 'Autofill timed out. The operation took too long — please try again or fill remaining fields manually.');
+      } else {
+        updateOverlay('error', `Error: ${err.message}`);
+      }
     }
   }
 
@@ -2824,6 +2834,13 @@
       startQueueFill,
       get queueContext() { return queueContext; },
       set queueContext(v) { queueContext = v; },
+
+      // Timeout / flow internals for testing
+      get API_TIMEOUT_MS() { return API_TIMEOUT_MS; },
+      withTimeout,
+      startFillFlow,
+      getNewMappings,
+      updateOverlay,
     };
   }
 
