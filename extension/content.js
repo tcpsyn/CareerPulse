@@ -823,41 +823,31 @@
   }
 
   function closeOpenDropdowns() {
-    // Strategy 1: Press Escape with proper event propagation
-    const active = document.activeElement;
-    if (active) {
-      for (const type of ['keydown', 'keypress', 'keyup']) {
-        active.dispatchEvent(new KeyboardEvent(type, { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+    try {
+      const active = document.activeElement;
+      if (!active || active === document.body) return;
+
+      // Strategy 1: Tab away — this is what real users do to dismiss dropdowns.
+      // Frameworks (React, Angular, Workday) handle Tab to close dropdowns and move focus.
+      active.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', keyCode: 9, which: 9, bubbles: true, cancelable: true }));
+      active.dispatchEvent(new KeyboardEvent('keyup', { key: 'Tab', code: 'Tab', keyCode: 9, which: 9, bubbles: true, cancelable: true }));
+
+      // Strategy 2: Pointer events (React 17+ uses pointer events, not mouse events)
+      // Click outside the dropdown at a neutral position
+      const neutralEl = document.querySelector('h1, h2, h3, [role="heading"], header, main') || document.body;
+      const rect = neutralEl.getBoundingClientRect?.() || { left: 0, top: 0 };
+      const x = rect.left + 5;
+      const y = rect.top + 5;
+      for (const type of ['pointerdown', 'mousedown', 'pointerup', 'mouseup', 'click']) {
+        neutralEl.dispatchEvent(new PointerEvent(type, {
+          bubbles: true, cancelable: true, composed: true,
+          clientX: x, clientY: y, pointerId: 1, pointerType: 'mouse',
+        }));
       }
-    }
 
-    // Strategy 2: Focus a different element to trigger blur handlers
-    // Find a safe element to focus (heading, label, or create a temporary one)
-    const safeTarget = document.querySelector('h1, h2, h3, [role="heading"], label, p');
-    if (safeTarget) {
-      safeTarget.setAttribute('tabindex', '-1');
-      safeTarget.focus();
-      safeTarget.removeAttribute('tabindex');
-    }
-
-    // Strategy 3: Click outside at page coordinates to dismiss overlays
-    document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 0, clientY: 0 }));
-    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 0, clientY: 0 }));
-    document.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 0, clientY: 0 }));
-
-    // Strategy 4: Programmatically hide visible listbox/popover elements
-    const popups = document.querySelectorAll(
-      '[role="listbox"], [role="menu"], [role="dialog"][class*="dropdown"], '
-      + '[class*="dropdown-menu"], [class*="listbox"], [class*="popup"], '
-      + '[data-automation-id*="dropdown"], [class*="WJLP"], [class*="WMP"]'
-    );
-    for (const popup of popups) {
-      if (popup.offsetParent !== null && popup.offsetHeight > 50) {
-        popup.style.display = 'none';
-        // Restore after a tick so the framework can clean up
-        setTimeout(() => { popup.style.display = ''; }, 500);
-      }
-    }
+      // Strategy 3: Blur active element
+      active.blur();
+    } catch { /* ignore errors in test/headless environments */ }
   }
 
   // ─── Typeahead handling ────────────────────────────────────
