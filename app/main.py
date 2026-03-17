@@ -199,6 +199,57 @@ async def lifespan(app: FastAPI):
     await app.state.db.close()
 
 
+def _trim_profile_for_autofill(profile: dict) -> dict:
+    """Trim profile to essential fields for autofill, reducing prompt size for smaller AI models."""
+    trimmed = {}
+    # Always include personal info
+    personal_keys = [
+        "full_name", "middle_name", "preferred_name", "email", "phone",
+        "phone_country_code", "phone_type", "additional_phone",
+        "address_street1", "address_street2", "address_city", "address_state",
+        "address_zip", "address_country_code", "address_country_name",
+        "location", "linkedin_url", "github_url", "portfolio_url", "website_url",
+        "date_of_birth", "pronouns", "drivers_license", "drivers_license_class",
+        "drivers_license_state", "country_of_citizenship", "authorized_to_work_us",
+        "requires_sponsorship", "authorization_type", "security_clearance",
+        "clearance_status", "desired_salary_min", "desired_salary_max",
+        "salary_period", "availability_date", "notice_period", "willing_to_relocate",
+        "how_heard_default", "background_check_consent",
+    ]
+    for key in personal_keys:
+        if key in profile and profile[key]:
+            trimmed[key] = profile[key]
+
+    # Include work history but only titles/companies (not full descriptions)
+    if profile.get("work_history"):
+        trimmed["work_history"] = [
+            {k: v for k, v in job.items() if k != "description"}
+            for job in profile["work_history"][:5]
+        ]
+
+    # Include education (compact)
+    if profile.get("education"):
+        trimmed["education"] = profile["education"][:3]
+
+    # Include certifications (names only)
+    if profile.get("certifications"):
+        trimmed["certifications"] = [
+            {"name": c.get("name"), "issuing_org": c.get("issuing_org")}
+            for c in profile["certifications"][:5]
+        ]
+
+    # Skills as a simple list
+    if profile.get("skills"):
+        trimmed["skills"] = [s.get("name") for s in profile["skills"][:10]]
+
+    # Include languages, EEO, military if present
+    for key in ["languages", "eeo", "military", "references"]:
+        if profile.get(key):
+            trimmed[key] = profile[key]
+
+    return trimmed
+
+
 def _build_form_analysis_prompt(
     profile_summary: str,
     qa_summary: str,
@@ -221,53 +272,14 @@ def _build_form_analysis_prompt(
     else:
         html_section = ""
 
-    prompt = f"""You are a job application autofill assistant. Analyze form fields and map them to the user's profile data.
+    prompt = f"""You are a job application autofill assistant. Map form fields to the user's REAL profile data below.
 
-=== USER PROFILE SCHEMA ===
-The profile has these sections and field types:
+CRITICAL: You MUST use the EXACT values from the USER PROFILE DATA below. NEVER use placeholder data like "John Doe", "123 Main St", "Anytown", or "10001". The user's real information is provided — use it.
 
-PERSONAL INFO (top-level fields):
-- full_name, middle_name, preferred_name (text)
-- email (text)
-- phone, phone_country_code, phone_type, additional_phone (text)
-- address_street1, address_street2, address_city, address_state, address_zip, address_country_code, address_country_name
-- perm_address_street1, perm_address_street2, perm_address_city, perm_address_state, perm_address_zip, perm_address_country_code, perm_address_country_name
-- location (text, general location summary)
-- linkedin_url, github_url, portfolio_url, website_url
-- date_of_birth (text, ISO format)
-- pronouns
-- drivers_license, drivers_license_class, drivers_license_state
-
-WORK AUTHORIZATION:
-- country_of_citizenship, authorized_to_work_us, requires_sponsorship, authorization_type
-- security_clearance, clearance_status
-
-SALARY & AVAILABILITY:
-- desired_salary_min, desired_salary_max (integers)
-- salary_period (e.g. "yearly", "hourly")
-- availability_date (text, ISO format)
-- notice_period (text, e.g. "2 weeks")
-- willing_to_relocate (text)
-
-PREFERENCES:
-- how_heard_default (text, default answer for "How did you hear about us?")
-- background_check_consent (text)
-- cover_letter_template (text)
-
-WORK HISTORY (array): company, job_title, location_city, location_state, location_country, start_month, start_year, end_month, end_year, is_current, description
-EDUCATION (array): school, degree_type, field_of_study, minor, start_month, start_year, grad_month, grad_year, gpa, honors
-CERTIFICATIONS (array): name, issuing_org, cert_type, license_number, state, date_obtained, expiration_date
-SKILLS (array): name, years_experience, proficiency
-LANGUAGES (array): language, proficiency
-REFERENCES (array): name, title, company, phone, email, relationship, years_known
-MILITARY: branch, rank, specialty, start_date, end_date
-EEO: gender, race_ethnicity, disability_status, veteran_status, veteran_categories, sexual_orientation
-
-=== USER PROFILE DATA ===
+=== USER PROFILE DATA (use these EXACT values) ===
 {profile_summary}
 
 === CUSTOM Q&A BANK ===
-Each entry has: question_pattern, category, answer.
 {qa_summary}
 
 === FORM DATA ===
@@ -2043,7 +2055,9 @@ Rank by ROI (jobs unlocked relative to learning difficulty). Return top 5 skills
         profile = await app.state.db.get_full_profile()
         custom_qa = await app.state.db.get_custom_qa()
 
-        profile_summary = json.dumps(profile, default=str, indent=2)
+        # Trim profile to reduce prompt size for smaller AI models
+        trimmed_profile = _trim_profile_for_autofill(profile)
+        profile_summary = json.dumps(trimmed_profile, default=str, indent=2)
         qa_summary = json.dumps(custom_qa, default=str) if custom_qa else "[]"
         fields_summary = json.dumps(form_fields[:200], default=str, indent=2) if form_fields else ""
 

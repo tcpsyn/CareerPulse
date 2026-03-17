@@ -2117,7 +2117,8 @@
 
       // Negative signals: search forms
       for (const form of forms) {
-        if (form.getAttribute('role') === 'search' || form.action?.includes('search')) return 'none';
+        const formAction = form.getAttribute('action') || '';
+        if (form.getAttribute('role') === 'search' || formAction.includes('search')) return 'none';
       }
 
       // Job-specific signals — fields that only appear on job applications
@@ -2266,6 +2267,7 @@
       origin,
       currentPage: 1,
       totalFilled: filledOnThisPage || 0,
+      lastUrl: location.href,
       observer: null,
       debounceTimer: null,
       origPushState: null,
@@ -2286,9 +2288,13 @@
 
     function checkForNewPage() {
       if (!multiPageState) return;
+      // Only detect a new page if the URL actually changed
+      const currentUrl = location.href;
+      if (currentUrl === multiPageState.lastUrl) return;
       const fields = extractFormData();
       const unfilled = fields.filter(f => f.required && !f.currentValue);
       if (unfilled.length >= 2) {
+        multiPageState.lastUrl = currentUrl;
         multiPageState.currentPage++;
         showMultiPageBadge(multiPageState.currentPage);
       }
