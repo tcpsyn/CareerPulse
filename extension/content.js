@@ -823,23 +823,39 @@
   }
 
   function closeOpenDropdowns() {
-    // Send Escape to active element
+    // Strategy 1: Press Escape with proper event propagation
     const active = document.activeElement;
     if (active) {
-      active.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
-      active.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', bubbles: true }));
+      for (const type of ['keydown', 'keypress', 'keyup']) {
+        active.dispatchEvent(new KeyboardEvent(type, { key: 'Escape', code: 'Escape', keyCode: 27, which: 27, bubbles: true, cancelable: true }));
+      }
     }
-    // Click body to dismiss any overlay/popover
-    document.body.click();
-    // Also try to blur focused element to dismiss
-    if (active && active !== document.body) {
-      active.blur();
+
+    // Strategy 2: Focus a different element to trigger blur handlers
+    // Find a safe element to focus (heading, label, or create a temporary one)
+    const safeTarget = document.querySelector('h1, h2, h3, [role="heading"], label, p');
+    if (safeTarget) {
+      safeTarget.setAttribute('tabindex', '-1');
+      safeTarget.focus();
+      safeTarget.removeAttribute('tabindex');
     }
-    // Remove any lingering listboxes/popovers that are visible
-    const openListboxes = document.querySelectorAll('[role="listbox"], [role="menu"], [data-testid*="dropdown"]');
-    for (const lb of openListboxes) {
-      if (lb.offsetParent !== null) { // visible
-        lb.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+
+    // Strategy 3: Click outside at page coordinates to dismiss overlays
+    document.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX: 0, clientY: 0 }));
+    document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX: 0, clientY: 0 }));
+    document.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: 0, clientY: 0 }));
+
+    // Strategy 4: Programmatically hide visible listbox/popover elements
+    const popups = document.querySelectorAll(
+      '[role="listbox"], [role="menu"], [role="dialog"][class*="dropdown"], '
+      + '[class*="dropdown-menu"], [class*="listbox"], [class*="popup"], '
+      + '[data-automation-id*="dropdown"], [class*="WJLP"], [class*="WMP"]'
+    );
+    for (const popup of popups) {
+      if (popup.offsetParent !== null && popup.offsetHeight > 50) {
+        popup.style.display = 'none';
+        // Restore after a tick so the framework can clean up
+        setTimeout(() => { popup.style.display = ''; }, 500);
       }
     }
   }
