@@ -226,8 +226,7 @@ def _deterministic_fill(fields: list[dict], profile: dict) -> tuple[list[dict], 
         (r"\bemail\b", profile.get("email", ""), "fill_text"),
         # Phone (exclude "extension" fields)
         (r"(?!.*\bextension\b).*(\bphone[\s_-]?number\b|\bmobile\b|\bcell\b|\btelephone\b)", profile.get("phone", ""), "fill_text"),
-        # Country phone code — skip, these custom comboboxes are usually pre-filled
-        (r"\bphone[\s_-]?country[\s_-]?code\b|\bcountry[\s_-]?code\b|\bcountry[\s_-]?phone\b", "", "skip"),
+        (r"\bphone[\s_-]?country[\s_-]?code\b|\bcountry[\s_-]?code\b|\bcountry[\s_-]?phone\b", profile.get("address_country_name", "United States") + " (" + profile.get("phone_country_code", "+1") + ")", "select_dropdown"),
         # Phone extension — skip (user typically doesn't have one)
         (r"\bphone[\s_-]?ext(ension)?\b|\bext(ension)?\b", "", "skip"),
         # Address

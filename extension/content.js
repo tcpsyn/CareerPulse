@@ -770,10 +770,16 @@
     }
 
     const dd = dropdown || findTypeaheadDropdown(el);
-    if (!dd) return { success: false, reason: 'no dropdown appeared' };
+    if (!dd) {
+      closeOpenDropdowns();
+      return { success: false, reason: 'no dropdown appeared' };
+    }
 
     const options = getDropdownOptions(dd);
-    if (!options.length) return { success: false, reason: 'no options in dropdown' };
+    if (!options.length) {
+      closeOpenDropdowns();
+      return { success: false, reason: 'no options in dropdown' };
+    }
 
     // Try typing to filter first (for searchable dropdowns)
     const searchInput = dd.querySelector('input') || el.querySelector('input');
@@ -788,6 +794,8 @@
       const match = fuzzyMatchDropdownOption(filteredOptions.length ? filteredOptions : options, value, fieldHints);
       if (match) {
         clickOption(match);
+        await sleep(200);
+        closeOpenDropdowns();
         return { success: true, selectedText: match.textContent.trim() };
       }
     }
@@ -796,14 +804,12 @@
     const match = fuzzyMatchDropdownOption(options, value, fieldHints);
     if (match) {
       clickOption(match);
+      await sleep(200);
+      closeOpenDropdowns();
       return { success: true, selectedText: match.textContent.trim() };
     }
 
-    // Close the dropdown since we couldn't match
-    document.activeElement?.dispatchEvent(
-      new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })
-    );
-
+    closeOpenDropdowns();
     return { success: false, reason: `no matching option for "${value}"` };
   }
 
@@ -814,13 +820,28 @@
     optionEl.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
     optionEl.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
     optionEl.click();
-    // Close any lingering dropdowns after selection
-    setTimeout(() => {
-      document.activeElement?.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true })
-      );
-      document.body.click();
-    }, 200);
+  }
+
+  function closeOpenDropdowns() {
+    // Send Escape to active element
+    const active = document.activeElement;
+    if (active) {
+      active.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+      active.dispatchEvent(new KeyboardEvent('keyup', { key: 'Escape', code: 'Escape', bubbles: true }));
+    }
+    // Click body to dismiss any overlay/popover
+    document.body.click();
+    // Also try to blur focused element to dismiss
+    if (active && active !== document.body) {
+      active.blur();
+    }
+    // Remove any lingering listboxes/popovers that are visible
+    const openListboxes = document.querySelectorAll('[role="listbox"], [role="menu"], [data-testid*="dropdown"]');
+    for (const lb of openListboxes) {
+      if (lb.offsetParent !== null) { // visible
+        lb.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true }));
+      }
+    }
   }
 
   // ─── Typeahead handling ────────────────────────────────────
@@ -847,7 +868,8 @@
       const match = fuzzyMatchDropdownOption(options, value, fieldHints);
       if (match) {
         clickOption(match);
-        await sleep(100);
+        await sleep(200);
+        closeOpenDropdowns();
         return { success: true, selectedText: match.textContent.trim() };
       }
 
@@ -865,7 +887,8 @@
           const retryMatch = fuzzyMatchDropdownOption(retryOptions, value, fieldHints);
           if (retryMatch) {
             clickOption(retryMatch);
-            await sleep(100);
+            await sleep(200);
+            closeOpenDropdowns();
             return { success: true, selectedText: retryMatch.textContent.trim() };
           }
         }
@@ -874,7 +897,8 @@
       // Last resort: select first option if it seems reasonable
       if (wait >= 4 && options.length <= 3) {
         clickOption(options[0]);
-        await sleep(100);
+        await sleep(200);
+        closeOpenDropdowns();
         return { success: true, selectedText: options[0].textContent.trim(), fallback: true };
       }
     }
@@ -885,12 +909,14 @@
       await sleep(100);
       el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }));
       await sleep(100);
+      closeOpenDropdowns();
       // Check if value changed (something was selected)
       if (el.value !== value && el.value !== '') {
         return { success: true, selectedText: el.value, keyboard: true };
       }
     } catch { /* skip */ }
 
+    closeOpenDropdowns();
     return { success: false };
   }
 
@@ -1383,6 +1409,10 @@
         }
 
         results.push(result);
+
+        // Close any dropdowns left open by the previous fill
+        closeOpenDropdowns();
+        await sleep(100);
 
         if (result.success && !result.skipped) {
           filledCount++;
