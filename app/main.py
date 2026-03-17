@@ -199,6 +199,146 @@ async def lifespan(app: FastAPI):
     await app.state.db.close()
 
 
+import re as _re
+
+
+def _deterministic_fill(fields: list[dict], profile: dict) -> tuple[list[dict], list[dict]]:
+    """Match common form fields to profile data without AI. Returns (mappings, remaining_fields)."""
+    if not fields or not profile:
+        return [], fields or []
+
+    full_name = profile.get("full_name", "")
+    name_parts = full_name.split(None, 1) if full_name else ["", ""]
+    first_name = name_parts[0] if name_parts else ""
+    last_name = name_parts[1] if len(name_parts) > 1 else ""
+
+    # Field patterns → profile value mappings
+    # Each entry: (patterns_for_label_or_name, value, action)
+    rules = [
+        # Name fields
+        (r"\bfirst[\s_-]?name\b", first_name, "fill_text"),
+        (r"\bgiven[\s_-]?name\b", first_name, "fill_text"),
+        (r"\blast[\s_-]?name\b", last_name, "fill_text"),
+        (r"\bsurname\b|\bfamily[\s_-]?name\b", last_name, "fill_text"),
+        (r"\bfull[\s_-]?name\b|\byour[\s_-]?name\b", full_name, "fill_text"),
+        (r"\bmiddle[\s_-]?name\b", profile.get("middle_name", ""), "fill_text"),
+        # Email
+        (r"\bemail\b", profile.get("email", ""), "fill_text"),
+        # Phone
+        (r"\bphone[\s_-]?number\b|\bmobile\b|\bcell\b|\btelephone\b", profile.get("phone", ""), "fill_text"),
+        (r"\bphone[\s_-]?country[\s_-]?code\b|\bcountry[\s_-]?code\b", profile.get("phone_country_code", "+1"), "fill_text"),
+        # Address
+        (r"\baddress[\s_-]?line[\s_-]?1\b|\bstreet[\s_-]?address\b|\baddress[\s_-]?1\b", profile.get("address_street1", ""), "fill_text"),
+        (r"\baddress[\s_-]?line[\s_-]?2\b|\bapt\b|\bsuite\b|\baddress[\s_-]?2\b", profile.get("address_street2", ""), "fill_text"),
+        (r"\bcity\b|\btown\b", profile.get("address_city", ""), "fill_text"),
+        (r"\bpostal[\s_-]?code\b|\bzip[\s_-]?code\b|\bzip\b|\bpostcode\b", profile.get("address_zip", ""), "fill_text"),
+        # State - handle as dropdown or text
+        (r"\bstate\b|\bprovince\b|\bregion\b", profile.get("address_state", ""), None),  # action determined below
+        # Country
+        (r"\bcountry\b", profile.get("address_country_name", "United States"), None),
+        # URLs
+        (r"\blinkedin\b", profile.get("linkedin_url", ""), "fill_text"),
+        (r"\bgithub\b", profile.get("github_url", ""), "fill_text"),
+        (r"\bportfolio\b|\bwebsite\b|\bpersonal[\s_-]?url\b", profile.get("portfolio_url", "") or profile.get("website_url", ""), "fill_text"),
+        # Work authorization
+        (r"\bauthori[sz]ed[\s_-]?to[\s_-]?work\b", profile.get("authorized_to_work_us", ""), None),
+        (r"\bsponsorship\b|\bvisa[\s_-]?sponsor\b", profile.get("requires_sponsorship", ""), None),
+        # Salary
+        (r"\bsalary\b|\bcompensation\b|\bdesired[\s_-]?pay\b", str(profile.get("desired_salary_min", "")), "fill_text"),
+        # How heard
+        (r"\bhow[\s_-]?did[\s_-]?you[\s_-]?(hear|find|learn)\b|\breferral[\s_-]?source\b", profile.get("how_heard_default", "Online Job Board"), None),
+        # Date of birth
+        (r"\bdate[\s_-]?of[\s_-]?birth\b|\bbirthday\b|\bdob\b", profile.get("date_of_birth", ""), "fill_text"),
+    ]
+
+    mappings = []
+    remaining = []
+    matched_selectors = set()
+
+    for field in fields:
+        label = (field.get("label") or "").lower()
+        name = (field.get("name") or "").lower()
+        placeholder = (field.get("placeholder") or "").lower()
+        field_id = (field.get("id") or "").lower()
+        searchable = f"{label} {name} {placeholder} {field_id}"
+        heading = (field.get("nearbyHeading") or "").lower()
+
+        matched = False
+        for pattern, value, action in rules:
+            if not value:
+                continue
+            if _re.search(pattern, searchable, _re.IGNORECASE):
+                tag = field.get("tag", "").lower()
+                # Determine action based on field type
+                if action is None:
+                    if tag == "select" or field.get("options"):
+                        action = "select_dropdown"
+                    elif field.get("type") in ("radio", "checkbox"):
+                        action = "click_radio" if field.get("type") == "radio" else "check_checkbox"
+                    else:
+                        action = "fill_text"
+
+                # For dropdowns, try to match the value to available options
+                if action == "select_dropdown" and field.get("options"):
+                    options = field["options"]
+                    best = _match_option(value, options)
+                    if best:
+                        value = best
+
+                mappings.append({
+                    "selector": field["selector"],
+                    "value": value,
+                    "action": action,
+                    "confidence": 1.0,
+                    "field_label": field.get("label", ""),
+                })
+                matched_selectors.add(field["selector"])
+                matched = True
+                break
+
+        if not matched:
+            # Check if it's a "phone" field by heading context
+            if "phone" in heading and "country" not in searchable and "code" not in searchable:
+                phone = profile.get("phone", "")
+                if phone:
+                    mappings.append({
+                        "selector": field["selector"],
+                        "value": phone,
+                        "action": "fill_text",
+                        "confidence": 0.9,
+                        "field_label": field.get("label", ""),
+                    })
+                    matched_selectors.add(field["selector"])
+                    matched = True
+
+        if not matched:
+            remaining.append(field)
+
+    return mappings, remaining
+
+
+def _match_option(value: str, options) -> str | None:
+    """Find the best matching option for a value in a dropdown."""
+    value_lower = value.lower().strip()
+    # options can be a list of strings or list of dicts with value/text
+    option_strs = []
+    for opt in options:
+        if isinstance(opt, dict):
+            option_strs.append(opt.get("text", opt.get("value", "")))
+        else:
+            option_strs.append(str(opt))
+
+    # Exact match
+    for opt in option_strs:
+        if opt.lower().strip() == value_lower:
+            return opt
+    # Contains match
+    for opt in option_strs:
+        if value_lower in opt.lower() or opt.lower() in value_lower:
+            return opt
+    return None
+
+
 def _trim_profile_for_autofill(profile: dict) -> dict:
     """Trim profile to essential fields for autofill, reducing prompt size for smaller AI models."""
     trimmed = {}
@@ -2062,18 +2202,25 @@ Rank by ROI (jobs unlocked relative to learning difficulty). Return top 5 skills
         form_fields = body.get("fields", [])
         page_url = body.get("page_url", "")
 
+        profile = await app.state.db.get_full_profile()
+
+        # Phase 1: Deterministic matching for common fields (instant, reliable)
+        deterministic_mappings, remaining_fields = _deterministic_fill(form_fields, profile)
+
+        # If all fields handled deterministically, skip AI entirely
+        if not remaining_fields:
+            return {"mappings": deterministic_mappings}
+
+        # Phase 2: AI for remaining complex fields
         client = getattr(app.state, "ai_client", None)
         if not client:
-            return {"mappings": [], "error": "No AI provider configured"}
+            return {"mappings": deterministic_mappings, "error": "No AI provider for remaining fields"}
 
-        profile = await app.state.db.get_full_profile()
         custom_qa = await app.state.db.get_custom_qa()
-
-        # Trim profile to reduce prompt size for smaller AI models
         trimmed_profile = _trim_profile_for_autofill(profile)
         profile_summary = json.dumps(trimmed_profile, default=str, indent=2)
         qa_summary = json.dumps(custom_qa, default=str) if custom_qa else "[]"
-        fields_summary = json.dumps(form_fields[:200], default=str, indent=2) if form_fields else ""
+        fields_summary = json.dumps(remaining_fields[:200], default=str, indent=2)
 
         prompt = _build_form_analysis_prompt(
             profile_summary=profile_summary,
@@ -2093,8 +2240,8 @@ Rank by ROI (jobs unlocked relative to learning difficulty). Return top 5 skills
             if text.startswith("```"):
                 text = text.split("\n", 1)[1] if "\n" in text else text[3:]
                 text = text.rsplit("```", 1)[0]
-            mappings = json.loads(text)
-            return {"mappings": mappings}
+            ai_mappings = json.loads(text)
+            return {"mappings": deterministic_mappings + ai_mappings}
         except asyncio.TimeoutError:
             logger.warning("Autofill analyze timed out after %ds", AUTOFILL_ANALYZE_TIMEOUT)
             return {"mappings": [], "error": f"AI analysis timed out after {AUTOFILL_ANALYZE_TIMEOUT}s"}
