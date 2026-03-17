@@ -465,9 +465,22 @@
     }
   }
 
+  function isPhoneExtensionField(el) {
+    if (!el) return false;
+    try {
+      const hints = getFieldHints(el);
+      const combined = `${hints.label} ${hints.name} ${hints.id} ${hints.placeholder}`;
+      return /\bext(ension)?\b/i.test(combined);
+    } catch {
+      return false;
+    }
+  }
+
   function isPhoneField(el) {
     if (!el) return false;
     try {
+      // Phone extension fields are NOT phone number fields
+      if (isPhoneExtensionField(el)) return false;
       if ((el.type || '').toLowerCase() === 'tel') return true;
       const hints = getFieldHints(el);
       const combined = `${hints.label} ${hints.name} ${hints.id} ${hints.placeholder}`;
@@ -1101,6 +1114,14 @@
 
       // Compute field hints once for normalization throughout this fill
       const fieldHints = getFieldHints(el);
+
+      // Guard: skip phone extension fields when AI sends a phone number
+      if (isPhoneExtensionField(el)) {
+        const digits = String(value).replace(/\D/g, '');
+        if (digits.length >= 7) {
+          return { selector, success: true, skipped: true, reason: 'phone extension field — value looks like a phone number' };
+        }
+      }
 
       // Capture original value before filling (for undo support)
       const origVal = el.value || el.textContent?.trim() || '';
@@ -2883,6 +2904,7 @@
       fuzzyMatchOption,
       getFieldHints,
       isPhoneField,
+      isPhoneExtensionField,
       isDateField,
       parseFlexibleDate,
       fillDateField,
