@@ -1168,6 +1168,8 @@ class Database:
         if not row or not row["last_scraped_at"]:
             return True
         last = datetime.fromisoformat(row["last_scraped_at"])
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
         interval = timedelta(hours=row["interval_hours"])
         return datetime.now(timezone.utc) > last + interval
 
