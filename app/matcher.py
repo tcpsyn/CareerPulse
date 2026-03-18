@@ -143,6 +143,7 @@ class JobMatcher:
             result = await self.score_job(job["description"])
             result["job_id"] = job["id"]
             results.append(result)
+            await asyncio.sleep(0)  # Yield between individual scores
         return results
 
     async def batch_score(self, jobs: list[dict], delay: float = 2.0) -> list[dict]:

@@ -59,6 +59,15 @@ async def lifespan(app: FastAPI):
     await app.state.db.init()
     await app.state.db.migrate_resume_from_search_config()
 
+    # Separate DB connection for background tasks (scoring, scraping, enrichment)
+    # so they don't block API request handling on the main connection.
+    # In testing, share the same connection to avoid WAL visibility issues.
+    if not testing:
+        app.state.bg_db = Database(db_path)
+        await app.state.bg_db.init()
+    else:
+        app.state.bg_db = app.state.db
+
     if not testing:
         from app.config import Settings
         from app.scrapers import ALL_SCRAPERS
@@ -103,38 +112,38 @@ async def lifespan(app: FastAPI):
 
         async def scheduled_scrape():
             try:
-                db = app.state.db
-                config = await db.get_search_config()
+                bg_db = app.state.bg_db
+                config = await bg_db.get_search_config()
                 terms = config["search_terms"] if config else []
-                keys = await db.get_scraper_keys()
+                keys = await bg_db.get_scraper_keys()
                 scrapers = [s(search_terms=terms, scraper_keys=keys) for s in ALL_SCRAPERS]
-                await run_scrape_cycle(db, scrapers, search_terms=terms, scraper_keys=keys)
+                await run_scrape_cycle(bg_db, scrapers, search_terms=terms, scraper_keys=keys)
             except Exception:
                 logger.exception("Scheduled scrape failed")
 
         async def scheduled_enrichment():
             try:
-                await run_enrichment_cycle(app.state.db)
+                await run_enrichment_cycle(app.state.bg_db)
             except Exception:
                 logger.exception("Scheduled enrichment failed")
 
         async def scheduled_scoring():
             try:
-                await app.state.score_unscored(app.state.db)
+                await app.state.score_unscored(app.state.bg_db)
             except Exception:
                 logger.exception("Scheduled scoring failed")
 
         async def scheduled_maintenance():
             try:
-                await run_maintenance_cycle(app.state.db)
+                await run_maintenance_cycle(app.state.bg_db)
             except Exception:
                 logger.exception("Scheduled maintenance failed")
 
         async def scheduled_reminder_check():
             try:
-                due = await run_reminder_check(app.state.db, embedding_client=app.state.embedding_client)
+                due = await run_reminder_check(app.state.bg_db, embedding_client=app.state.embedding_client)
                 for r in due:
-                    await app.state.db.add_event(
+                    await app.state.bg_db.add_event(
                         r["job_id"], "reminder_due",
                         f"Follow-up reminder due for {r.get('company', 'unknown')}"
                     )
@@ -143,20 +152,20 @@ async def lifespan(app: FastAPI):
 
         async def scheduled_digest():
             try:
-                await run_digest_cycle(app.state.db)
+                await run_digest_cycle(app.state.bg_db)
             except Exception:
                 logger.exception("Scheduled digest failed")
 
         async def scheduled_alert_check():
             try:
-                await run_alert_check(app.state.db)
+                await run_alert_check(app.state.bg_db)
             except Exception:
                 logger.exception("Scheduled alert check failed")
 
         async def scheduled_embedding():
             try:
-                await run_job_embedding_cycle(app.state.db, app.state.embedding_client)
-                await run_context_embedding_cycle(app.state.db, app.state.embedding_client)
+                await run_job_embedding_cycle(app.state.bg_db, app.state.embedding_client)
+                await run_context_embedding_cycle(app.state.bg_db, app.state.embedding_client)
             except Exception:
                 logger.exception("Scheduled embedding failed")
 
@@ -217,6 +226,9 @@ async def lifespan(app: FastAPI):
         app.state.scheduler.shutdown(wait=False)
     from app.browser_pool import shutdown_browser_pool
     await shutdown_browser_pool()
+    bg_db = getattr(app.state, "bg_db", None)
+    if bg_db and bg_db is not app.state.db:
+        await bg_db.close()
     await app.state.db.close()
 
 
@@ -274,12 +286,15 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
                             r["job_id"], r["score"], r["reasons"],
                             r["concerns"], r["keywords"],
                         )
+                        await asyncio.sleep(0)  # Yield between DB writes
                         job = await db.get_job(r["job_id"])
                         if job:
                             await _check_high_score_alerts(db, r["job_id"], r["score"], job["title"], job["company"])
                     scored += len(results)
                     app.state.scoring_progress = {"scored": scored, "total": total, "active": True}
                     logger.info(f"Scored {scored}/{total} jobs")
+                    # Yield to event loop between batches — give API requests time to process
+                    await asyncio.sleep(0.5)
             finally:
                 app.state.scoring_progress = {"scored": scored, "total": total, "active": False}
                 logger.info(f"Scoring complete: {scored}/{total} jobs")
