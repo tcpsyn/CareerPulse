@@ -84,21 +84,21 @@ async def trigger_scrape(request: Request):
                 from app.scheduler import run_scrape_cycle, run_enrichment_cycle
                 from app.ai_client import check_ai_reachable
 
-                db = app.state.db
-                config = await db.get_search_config()
+                bg_db = app.state.bg_db
+                config = await bg_db.get_search_config()
                 terms = config["search_terms"] if config else []
-                keys = await db.get_scraper_keys()
+                keys = await bg_db.get_scraper_keys()
                 scrapers = [s(search_terms=terms, scraper_keys=keys) for s in ALL_SCRAPERS]
                 app.state.scrape_progress = {"completed": 0, "total": len(scrapers), "current": None, "new_jobs": 0, "active": True}
-                await run_scrape_cycle(db, scrapers, search_terms=terms, progress=app.state.scrape_progress, scraper_keys=keys, force=True)
+                await run_scrape_cycle(bg_db, scrapers, search_terms=terms, progress=app.state.scrape_progress, scraper_keys=keys, force=True)
 
-                await run_enrichment_cycle(db)
+                await run_enrichment_cycle(bg_db)
 
                 ai_client = getattr(app.state, "ai_client", None)
                 if ai_client:
                     reachable, detail = await check_ai_reachable(ai_client)
                     if reachable:
-                        await app.state.score_unscored(db)
+                        await app.state.score_unscored(bg_db)
                     else:
                         logger.warning(f"Skipping scoring: {detail}")
                         if app.state.scrape_progress:
@@ -135,7 +135,8 @@ async def scrape_progress(request: Request):
 @router.post("/jobs/enrich")
 async def enrich_jobs(request: Request):
     from app.scheduler import run_enrichment_cycle
-    enriched = await run_enrichment_cycle(request.app.state.db, limit=50)
+    bg_db = getattr(request.app.state, "bg_db", request.app.state.db)
+    enriched = await run_enrichment_cycle(bg_db, limit=50)
     return {"enriched": enriched}
 
 
@@ -148,7 +149,7 @@ async def trigger_score(request: Request):
     async def _run_scoring():
         try:
             await asyncio.wait_for(
-                app.state.score_unscored(app.state.db), timeout=1800
+                app.state.score_unscored(app.state.bg_db), timeout=1800
             )
         except asyncio.TimeoutError:
             logger.error("Background scoring timed out after 30 minutes")
