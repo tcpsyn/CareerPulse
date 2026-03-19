@@ -134,7 +134,7 @@ function isNew(createdAt) {
 }
 
 function getFreshness(job) {
-    const date = job.posted_date || job.created_at;
+    const date = job.last_seen_at || job.posted_date || job.created_at;
     if (!date) return null;
     const days = Math.floor((Date.now() - new Date(date)) / 86400000);
     if (days <= 1) return { label: "Fresh", class: "freshness-hot", days };

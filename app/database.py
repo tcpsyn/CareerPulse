@@ -100,6 +100,7 @@ _COLUMN_ALLOWLISTS = {
         "contact_lookup_done", "apply_url", "salary_estimate_min",
         "salary_estimate_max", "salary_confidence",
         "description_enriched", "enrichment_status", "enrichment_attempts",
+        "last_seen_at",
     },
     "custom_qa": {
         "question_pattern", "category", "answer", "times_used", "last_used",
@@ -580,6 +581,7 @@ class Database:
             "description_enriched": "ALTER TABLE jobs ADD COLUMN description_enriched INTEGER DEFAULT 0",
             "enrichment_status": "ALTER TABLE jobs ADD COLUMN enrichment_status TEXT DEFAULT 'pending'",
             "enrichment_attempts": "ALTER TABLE jobs ADD COLUMN enrichment_attempts INTEGER DEFAULT 0",
+            "last_seen_at": "ALTER TABLE jobs ADD COLUMN last_seen_at TEXT",
         }
         for col, sql in jobs_migrations.items():
             if col not in jobs_columns:
@@ -758,10 +760,10 @@ class Database:
         cursor = await self.db.execute(
             """INSERT OR IGNORE INTO jobs
                (title, company, location, salary_min, salary_max, description, url,
-                posted_date, application_method, contact_email, dedup_hash, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                posted_date, application_method, contact_email, dedup_hash, created_at, last_seen_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (title, company, location, salary_min, salary_max, description, url,
-             normalized_date, application_method, contact_email, dedup, now)
+             normalized_date, application_method, contact_email, dedup, now, now)
         )
         await self.db.commit()
         if cursor.rowcount == 0:
@@ -778,6 +780,13 @@ class Database:
         cursor = await self.db.execute("SELECT * FROM jobs WHERE dedup_hash = ?", (dedup_hash,))
         row = await cursor.fetchone()
         return dict(row) if row else None
+
+    async def update_last_seen(self, job_id: int):
+        now = datetime.now(timezone.utc).isoformat()
+        await self.db.execute(
+            "UPDATE jobs SET last_seen_at = ? WHERE id = ?", (now, job_id)
+        )
+        await self.db.commit()
 
     async def find_job_by_url(self, url: str) -> dict | None:
         cursor = await self.db.execute("SELECT * FROM jobs WHERE url = ?", (url,))
@@ -1108,12 +1117,13 @@ class Database:
             days_map = {"24h": 1, "3d": 3, "7d": 7, "14d": 14, "30d": 30}
             days = days_map.get(posted_within)
             if days:
-                query += " AND COALESCE(j.posted_date, j.created_at) >= datetime('now', ?)"
-                params.append(f"-{days} days")
+                cutoff = f"-{days} days"
+                query += " AND COALESCE(j.last_seen_at, j.posted_date, j.created_at) >= datetime('now', ?)"
+                params.append(cutoff)
         if sort_by == "score":
-            query += " ORDER BY js.match_score DESC NULLS LAST, COALESCE(j.posted_date, j.created_at) DESC"
+            query += " ORDER BY js.match_score DESC NULLS LAST, COALESCE(j.last_seen_at, j.posted_date, j.created_at) DESC"
         elif sort_by == "freshest":
-            query += " ORDER BY COALESCE(j.posted_date, j.created_at) DESC"
+            query += " ORDER BY COALESCE(j.last_seen_at, j.posted_date, j.created_at) DESC"
         else:
             query += " ORDER BY j.created_at DESC"
         query += " LIMIT ? OFFSET ?"
@@ -1144,26 +1154,23 @@ class Database:
         await self.db.commit()
 
     async def auto_dismiss_stale(self, max_age_days: int = 30, no_date_max_days: int = 30) -> int:
-        """Auto-dismiss old jobs. Never dismisses jobs with non-interested applications."""
+        """Auto-dismiss old jobs. Never dismisses jobs with non-interested applications
+        or jobs seen recently by a scraper."""
         cutoff_posted = (datetime.now(timezone.utc) - timedelta(days=max_age_days)).isoformat()
         cutoff_created = (datetime.now(timezone.utc) - timedelta(days=no_date_max_days)).isoformat()
-        cutoff_unix = str(int((datetime.now(timezone.utc) - timedelta(days=max_age_days)).timestamp()))
+        cutoff_seen = (datetime.now(timezone.utc) - timedelta(days=7)).isoformat()
         cursor = await self.db.execute("""
             UPDATE jobs SET dismissed = 1
             WHERE dismissed = 0
             AND id NOT IN (
                 SELECT job_id FROM applications WHERE status != 'interested'
             )
+            AND (last_seen_at IS NULL OR last_seen_at < ?)
             AND (
-                (posted_date IS NOT NULL
-                 AND CASE
-                     WHEN posted_date GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]*'
-                     THEN CAST(posted_date AS INTEGER) < CAST(? AS INTEGER)
-                     ELSE posted_date < ?
-                 END)
+                (posted_date IS NOT NULL AND posted_date < ?)
                 OR (posted_date IS NULL AND created_at < ?)
             )
-        """, (cutoff_unix, cutoff_posted, cutoff_created))
+        """, (cutoff_seen, cutoff_posted, cutoff_created))
         await self.db.commit()
         return cursor.rowcount
 
@@ -2212,6 +2219,13 @@ class Database:
         count = undismissed.rowcount
         if count:
             logger.info(f"Un-dismissed {count} wrongly dismissed recent jobs")
+        # Backfill last_seen_at from created_at for existing jobs
+        backfill = await self.db.execute(
+            "UPDATE jobs SET last_seen_at = created_at WHERE last_seen_at IS NULL"
+        )
+        await self.db.commit()
+        if backfill.rowcount:
+            logger.info(f"Backfilled last_seen_at for {backfill.rowcount} jobs")
 
     # --- Response Tracking ---
 

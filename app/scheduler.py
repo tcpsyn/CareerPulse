@@ -49,6 +49,7 @@ async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str]
             existing = await db.find_job_by_hash(dedup)
             if existing:
                 await db.insert_source(existing["id"], source_name, listing.url)
+                await db.update_last_seen(existing["id"])
             else:
                 job_id = await db.insert_job(
                     title=listing.title,
