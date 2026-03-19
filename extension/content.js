@@ -496,6 +496,8 @@
     try {
       // Phone extension fields are NOT phone number fields
       if (isPhoneExtensionField(el)) return false;
+      // Phone country code fields are NOT phone number fields
+      if (isPhoneCountryCodeField(el)) return false;
       if ((el.type || '').toLowerCase() === 'tel') return true;
       const hints = getFieldHints(el);
       const combined = `${hints.label} ${hints.name} ${hints.id} ${hints.placeholder}`;
@@ -503,6 +505,32 @@
     } catch {
       return false;
     }
+  }
+
+  function isPhoneCountryCodeField(el) {
+    if (!el) return false;
+    try {
+      const hints = getFieldHints(el);
+      const combined = `${hints.label} ${hints.name} ${hints.id} ${hints.placeholder}`;
+      return /country.?(?:phone|code)|phone.?country|dial.?code|calling.?code|countryPhoneCode|country.?iso/i.test(combined);
+    } catch {
+      return false;
+    }
+  }
+
+  function hasNearbyPhoneCountryCode(el) {
+    // Check if there's a phone country code dropdown near this phone field
+    try {
+      const container = el.closest('fieldset, [data-automation-id*="phone"], [class*="phone"], section, .form-group, .field-group') || el.parentElement?.parentElement?.parentElement;
+      if (!container) return false;
+      const candidates = container.querySelectorAll('select, [role="combobox"], [role="listbox"], [aria-haspopup], button[aria-haspopup]');
+      for (const c of candidates) {
+        if (isPhoneCountryCodeField(c)) return true;
+      }
+      // Also check for Workday-specific phone code dropdown
+      if (container.querySelector('[data-automation-id="countryPhoneCode"]')) return true;
+    } catch { /* skip */ }
+    return false;
   }
 
   // ─── Dropdown / listbox detection ──────────────────────────
@@ -1215,7 +1243,11 @@
           let fillValue = value;
           if (isPhoneField(el) && window.__cpNormalize) {
             try {
-              const digits = window.__cpNormalize.normalizePhone(value);
+              let digits = window.__cpNormalize.normalizePhone(value);
+              // Strip leading country code if a separate country code dropdown exists nearby
+              if (digits && digits.length === 11 && digits[0] === '1' && hasNearbyPhoneCountryCode(el)) {
+                digits = digits.slice(1);
+              }
               if (digits) {
                 fillValue = window.__cpNormalize.formatPhoneLike(digits, fieldHints.placeholder);
               }
@@ -2148,6 +2180,19 @@
 
       currentState = 'analyzing';
 
+      // Look up the job ID by URL if not already set (enables resume/cover letter downloads)
+      if (!currentJobId) {
+        try {
+          const lookupResult = await chrome.runtime.sendMessage({
+            type: 'lookupJob',
+            url: location.href,
+          });
+          if (lookupResult?.ok && lookupResult.data?.id) {
+            currentJobId = lookupResult.data.id;
+          }
+        } catch { /* skip — job may not be saved yet */ }
+      }
+
       // Detect ATS-specific adapter
       const atsAdapter = window.__cpAtsAdapters
         ? window.__cpAtsAdapters.detectATS(location.href, document)
@@ -3023,6 +3068,8 @@
       getFieldHints,
       isPhoneField,
       isPhoneExtensionField,
+      isPhoneCountryCodeField,
+      hasNearbyPhoneCountryCode,
       isDateField,
       parseFlexibleDate,
       fillDateField,

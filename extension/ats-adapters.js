@@ -43,6 +43,8 @@
         '[data-automation-id="addressSection_stateProvince"]': 'state',
         '[data-automation-id="addressSection_postalCode"]': 'postal_code',
         '[data-automation-id="phone-number"]': 'phone',
+        '[data-automation-id="countryPhoneCode"]': 'phone_country_code',
+        '[data-automation-id="phone-device-type"]': 'phone_device_type',
         '[data-automation-id="email"]': 'email',
         '[data-automation-id="linkedinQuestion"]': 'linkedin_url',
         '[data-automation-id="websiteQuestion"]': 'website',

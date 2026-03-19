@@ -158,6 +158,8 @@ describe('Workday adapter', () => {
     expect(map['[data-automation-id="legalNameSection_lastName"]']).toBe('last_name');
     expect(map['[data-automation-id="email"]']).toBe('email');
     expect(map['[data-automation-id="phone-number"]']).toBe('phone');
+    expect(map['[data-automation-id="countryPhoneCode"]']).toBe('phone_country_code');
+    expect(map['[data-automation-id="phone-device-type"]']).toBe('phone_device_type');
   });
 
   it('getFormRoot returns document', () => {

@@ -1162,6 +1162,64 @@ describe('isPhoneField', () => {
   it('returns false for null', () => {
     expect(api.isPhoneField(null)).toBe(false);
   });
+
+  it('does not detect phone country code field as phone', () => {
+    const input = createInput({ type: 'text', name: 'countryPhoneCode', id: 'cpc' });
+    expect(api.isPhoneField(input)).toBe(false);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
+// Phone country code detection
+// ═══════════════════════════════════════════════════════════════
+
+describe('isPhoneCountryCodeField', () => {
+  it('detects countryPhoneCode name', () => {
+    const input = createInput({ type: 'text', name: 'countryPhoneCode', id: 'cpc1' });
+    expect(api.isPhoneCountryCodeField(input)).toBe(true);
+  });
+
+  it('detects country code label', () => {
+    const input = createInput({ type: 'text', name: 'field_x', id: 'cc1' });
+    createLabel('cc1', 'Country Phone Code');
+    expect(api.isPhoneCountryCodeField(input)).toBe(true);
+  });
+
+  it('detects dial code label', () => {
+    const input = createInput({ type: 'text', name: 'dial', id: 'dc1' });
+    createLabel('dc1', 'Dial Code');
+    expect(api.isPhoneCountryCodeField(input)).toBe(true);
+  });
+
+  it('does not detect regular phone field', () => {
+    const input = createInput({ type: 'tel', name: 'phone', id: 'ph3' });
+    expect(api.isPhoneCountryCodeField(input)).toBe(false);
+  });
+
+  it('returns false for null', () => {
+    expect(api.isPhoneCountryCodeField(null)).toBe(false);
+  });
+});
+
+describe('hasNearbyPhoneCountryCode', () => {
+  it('finds Workday countryPhoneCode dropdown near phone field', () => {
+    const container = document.createElement('div');
+    container.setAttribute('data-automation-id', 'phone-section');
+    const codeDropdown = document.createElement('button');
+    codeDropdown.setAttribute('data-automation-id', 'countryPhoneCode');
+    codeDropdown.setAttribute('aria-haspopup', 'listbox');
+    container.appendChild(codeDropdown);
+    const phoneInput = createInput({ type: 'tel', name: 'phone', id: 'wdph' });
+    container.appendChild(phoneInput);
+    document.body.appendChild(container);
+
+    expect(api.hasNearbyPhoneCountryCode(phoneInput)).toBe(true);
+  });
+
+  it('returns false when no country code dropdown nearby', () => {
+    const input = createInput({ type: 'tel', name: 'phone_alone', id: 'ph_alone' });
+    expect(api.hasNearbyPhoneCountryCode(input)).toBe(false);
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -1670,10 +1728,12 @@ describe('startFillFlow overall timeout', () => {
     // own 60s per-API timeout at 115s total. The overall timeout should fire at 90s,
     // showing a user-friendly error before the per-API timeout triggers.
 
-    let callCount = 0;
-    globalThis.chrome.runtime.sendMessage = vi.fn().mockImplementation(() => {
-      callCount++;
-      if (callCount === 1) {
+    globalThis.chrome.runtime.sendMessage = vi.fn().mockImplementation((msg) => {
+      // lookupJob: resolve immediately (job not found)
+      if (msg.type === 'lookupJob') {
+        return Promise.resolve({ ok: false });
+      }
+      if (msg.type === 'analyzeForm') {
         // analyzeForm: resolves after 55s
         return new Promise(resolve => {
           setTimeout(() => resolve({
@@ -1686,7 +1746,7 @@ describe('startFillFlow overall timeout', () => {
           }), 55000);
         });
       }
-      // getNewMappings: hang forever (per-API timeout won't fire until 60s later = 115s total)
+      // getNewMappings / anything else: hang forever
       return new Promise(() => {});
     });
 
