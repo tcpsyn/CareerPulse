@@ -196,7 +196,8 @@ class Database:
                 contact_email TEXT,
                 dedup_hash TEXT UNIQUE NOT NULL,
                 dismissed INTEGER DEFAULT 0,
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                last_seen_at TEXT
             );
             CREATE TABLE IF NOT EXISTS sources (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
