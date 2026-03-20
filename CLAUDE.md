@@ -21,7 +21,7 @@ docker compose up -d
 - `app/main.py` — FastAPI app assembler: `create_app` factory + lifespan (378 lines); initializes dual DB connections: `app.state.db` for request handlers, `app.state.bg_db` for background tasks (prevents connection contention)
 - `app/routers/` — API routes split into 10 modules: `jobs.py`, `tailoring.py`, `pipeline.py`, `queue.py`, `contacts.py`, `analytics.py`, `settings.py`, `alerts.py`, `scraping.py`, `autofill.py`
   - `scraping.py`: manual scrape endpoint accepts `force=True` to bypass schedule check; uses `bg_db` for all DB access; scoring uses `asyncio.sleep(0)` between jobs to yield the event loop
-- `app/database.py` — async SQLite via aiosqlite (37 tables, FK enforcement, WAL mode)
+- `app/database.py` — async SQLite via aiosqlite (37 tables, FK enforcement, WAL mode); `jobs.last_seen_at` updated each scrape cycle, drives freshness filtering and 30-day auto-dismiss
 - `app/scrapers/` — job board scrapers (pluggable, 14 active sources); base class provides retry/backoff, rate limiting, UA rotation
 - `app/matcher.py` — AI-powered job/resume matching (supports resume override)
 - `app/tailoring.py` — generates tailored resumes/cover letters (supports resume override)
@@ -57,11 +57,11 @@ Required in `.env` (all optional — can configure via UI instead):
 
 ## Testing
 ```bash
-uv run pytest                             # 504 backend tests
+uv run pytest                             # 512 backend tests
 cd app/static && npx vitest run           # 92 frontend tests
-cd extension && npx vitest run            # 429 extension tests
+cd extension && npx vitest run            # 453 extension tests
 ```
-Total: 1,025 tests
+Total: 1,057 tests
 
 CI runs all three suites in parallel on push/PR to main: `.github/workflows/ci.yml`
 

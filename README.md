@@ -12,7 +12,7 @@ Self-hosted job discovery and application tool. Scrapes jobs from multiple board
 - **Comprehensive profile** — Personal info, work history, education, skills, certifications, languages, references, EEO responses
 - **Resume analysis** — Extracts skills, suggests job titles, rates ATS compatibility
 - **Application prep** — Generates tailored resumes and cover letters per job
-- **ATS-optimized PDFs** — Drag-and-drop resume and cover letter downloads
+- **ATS-optimized PDFs** — Tailored resume and cover letter downloads (PDF + DOCX); filenames sanitized to ASCII with company and job title
 - **Hiring manager lookup** — Searches the web for hiring contact info when not in the listing
 - **Direct apply links** — Scrapes actual "Apply" button URLs from job pages
 - **Salary estimation** — AI-powered salary range estimates when not listed
@@ -23,7 +23,7 @@ Self-hosted job discovery and application tool. Scrapes jobs from multiple board
 - **Custom Q&A bank** — Store answers to common application questions for reuse
 - **Region & clearance filters** — Filter by US, Europe, UK, Canada, LATAM, APAC; hide clearance/visa-required jobs
 - **One-click apply tracking** — "Mark as Applied" button with automatic timestamp
-- **Job freshness alerts** — Color-coded age badges and stale listing warnings
+- **Job freshness tracking** — `last_seen_at` updated each scrape cycle; jobs stay fresh as long as scrapers still find them. Feed hides stale jobs by default with a "Show stale" toggle. Jobs not seen in 30+ days are auto-dismissed daily.
 - **Daily digest** — Summary of new high-scoring matches with copy-to-clipboard
 - **CSV export** — Export your entire job pipeline to a spreadsheet
 - **Keyboard shortcuts** — Power-user navigation (j/k, ?, /, d, p, o, s)
@@ -135,6 +135,9 @@ The CareerPulse AutoFill extension auto-fills job application forms on any ATS u
 - Skipped fields are filled from your Q&A bank using fuzzy matching
 - React-compatible filling using native property descriptor setters
 - Works across iframes (common in Workday, iCIMS)
+- Country code dropdowns detected and excluded from phone number fills
+- Phone numbers normalized to consistent format; fallback guard prevents over-filling
+- Race/ethnicity dropdowns matched via lookup table normalization
 - **Job board overlay** — Injects a Save button and AI match score badge on LinkedIn, Indeed, Dice, and Glassdoor job listings; saved jobs sync directly to CareerPulse
 - **Auto-track applied** — Detects form submissions and automatically marks the job as applied in CareerPulse
 - **Queue fill orchestration** — Fills queued applications sequentially in the background; presents each form for review before moving to the next; never auto-submits
@@ -157,6 +160,7 @@ FastAPI (async)
 │       scraping.py: supports force=True to bypass scraper schedule check
 ├── app/scrapers/ — 14 active sources with retry/backoff, UA rotation, rate limiting
 ├── app/database.py — SQLite via aiosqlite (37 tables, FK enforcement, WAL mode)
+│   └── jobs.last_seen_at updated each scrape cycle; drives freshness filtering and 30-day auto-dismiss
 ├── AIClient (Anthropic | OpenAI | Google | OpenRouter | Ollama)
 │   ├── JobMatcher (scoring)
 │   ├── ResumeAnalyzer (analysis + ATS)
@@ -363,8 +367,9 @@ The full REST API is auto-documented at:
 - `GET /api/stats` — Job counts by status
 - `GET /api/digest` — Daily digest of new high-scoring jobs
 - `GET /api/export/csv` — Export jobs to CSV
-- `POST /api/scrape` — Trigger scrape cycle (background)
+- `POST /api/scrape` — Trigger scrape cycle (background); `?force=true` bypasses schedule check
 - `GET /api/scrape/progress` — Scrape progress
+- `POST /api/dismiss-stale` — Auto-dismiss all jobs not seen by scrapers in 30+ days
 - `POST /api/score` — Trigger scoring (background)
 - `GET /api/score/progress` — Scoring progress
 - `POST /api/clear-jobs` — Delete all jobs, scores, and applications (keeps config)
@@ -374,17 +379,17 @@ The full REST API is auto-documented at:
 ## Testing
 
 ```bash
-# Backend (504 tests)
+# Backend (512 tests)
 uv run pytest
 
 # Frontend (92 tests)
 cd app/static && npx vitest run
 
-# Extension (429 tests)
+# Extension (453 tests)
 cd extension && npx vitest run
 ```
 
-**Total: 1,025 tests** across backend, frontend, and extension.
+**Total: 1,057 tests** across backend, frontend, and extension.
 
 Backend covers: scrapers, database, API endpoints, matcher, tailor, resume analyzer, AI client, contact finder, apply link finder, salary estimator, company research, digest, profile CRUD, autofill, custom Q&A, saved views, response tracking, alerts, application queue, follow-up templates, contacts CRM, career advisor, offers, and predictions.
 
