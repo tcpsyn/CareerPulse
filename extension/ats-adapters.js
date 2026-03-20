@@ -145,6 +145,9 @@
         '#last_name': 'last_name',
         '#email': 'email',
         '#phone': 'phone',
+        '#phone_country_code': 'phone_country_code',
+        '#job_application_phone_country_code': 'phone_country_code',
+        'select[name="phone_country_code"]': 'phone_country_code',
         '#job_application_location': 'location',
         '#job_application_answers_attributes_0_text_value': 'linkedin_url',
         '#resume_text': 'resume',
@@ -169,8 +172,8 @@
     },
 
     enhanceExtraction(fields) {
-      // Greenhouse uses #resume_text for resume upload detection
       for (const field of fields) {
+        // Resume/cover letter detection
         if (field.id === 'resume' || field.id === 'resume_text'
             || (field.name && field.name.includes('resume'))) {
           field.atsHint = 'resume_upload';
@@ -178,6 +181,24 @@
         if (field.id === 'cover_letter' || field.id === 'cover_letter_text'
             || (field.name && field.name.includes('cover_letter'))) {
           field.atsHint = 'cover_letter';
+        }
+
+        // EEO / voluntary self-identification field tagging
+        const text = `${field.label || ''} ${field.name || ''} ${field.id || ''}`.toLowerCase();
+        if (/\bgender\b/.test(text) && !field.atsHint) {
+          field.atsHint = 'eeo_gender';
+        }
+        if (/\b(race|ethnicity|ethnic)\b/.test(text) && !field.atsHint) {
+          field.atsHint = 'eeo_race_ethnicity';
+        }
+        if (/\bveteran\b/.test(text) && !field.atsHint) {
+          field.atsHint = 'eeo_veteran_status';
+        }
+        if (/\bdisabilit/.test(text) && !field.atsHint) {
+          field.atsHint = 'eeo_disability_status';
+        }
+        if (/\bhispanic\b|\blatino\b/.test(text) && !field.atsHint) {
+          field.atsHint = 'eeo_hispanic_latino';
         }
       }
       return fields;

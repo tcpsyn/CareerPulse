@@ -1376,6 +1376,71 @@ describe('detectUploadType', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// enrichFieldHints
+// ═══════════════════════════════════════════════════════════════
+
+describe('enrichFieldHints', () => {
+  it('tags a select with dial code options as phone country code', () => {
+    const fields = [{
+      tag: 'select',
+      label: '',
+      name: 'cc_field',
+      id: 'cc1',
+      options: [
+        { value: 'US', text: 'United States (+1)' },
+        { value: 'GB', text: 'United Kingdom (+44)' },
+        { value: 'DE', text: 'Germany (+49)' },
+        { value: 'FR', text: 'France (+33)' },
+        { value: 'IN', text: 'India (+91)' },
+        { value: 'AU', text: 'Australia (+61)' },
+        { value: 'JP', text: 'Japan (+81)' },
+        { value: 'AF', text: 'Afghanistan (+93)' },
+      ],
+    }];
+    const result = api.enrichFieldHints(fields);
+    expect(result[0].label).toContain('phone country code');
+  });
+
+  it('does not change label if already contains country code hint', () => {
+    const fields = [{
+      tag: 'select',
+      label: 'Phone Country Code',
+      name: 'country_code',
+      id: 'cc2',
+      options: [
+        { value: 'US', text: 'United States (+1)' },
+        { value: 'GB', text: 'United Kingdom (+44)' },
+        { value: 'DE', text: 'Germany (+49)' },
+        { value: 'FR', text: 'France (+33)' },
+        { value: 'IN', text: 'India (+91)' },
+        { value: 'AU', text: 'Australia (+61)' },
+      ],
+    }];
+    const result = api.enrichFieldHints(fields);
+    expect(result[0].label).toBe('Phone Country Code');
+  });
+
+  it('does not tag non-dial-code selects', () => {
+    const fields = [{
+      tag: 'select',
+      label: 'State',
+      name: 'state',
+      id: 'st1',
+      options: [
+        { value: 'CA', text: 'California' },
+        { value: 'NY', text: 'New York' },
+        { value: 'TX', text: 'Texas' },
+        { value: 'FL', text: 'Florida' },
+        { value: 'WA', text: 'Washington' },
+        { value: 'OR', text: 'Oregon' },
+      ],
+    }];
+    const result = api.enrichFieldHints(fields);
+    expect(result[0].label).toBe('State');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
 // Multi-page state tracking
 // ═══════════════════════════════════════════════════════════════
 

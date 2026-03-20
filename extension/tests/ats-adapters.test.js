@@ -282,6 +282,49 @@ describe('Greenhouse adapter', () => {
     const enhanced = greenhouse.enhanceExtraction(fields);
     expect(enhanced[0].atsHint).toBe('cover_letter');
   });
+
+  it('getFieldMap includes phone country code selectors', () => {
+    const map = greenhouse.getFieldMap();
+    expect(map['#phone_country_code']).toBe('phone_country_code');
+    expect(map['#job_application_phone_country_code']).toBe('phone_country_code');
+    expect(map['select[name="phone_country_code"]']).toBe('phone_country_code');
+  });
+
+  it('enhanceExtraction tags gender field', () => {
+    const fields = [{ id: 'gender_select', name: 'gender', label: 'Gender' }];
+    const enhanced = greenhouse.enhanceExtraction(fields);
+    expect(enhanced[0].atsHint).toBe('eeo_gender');
+  });
+
+  it('enhanceExtraction tags race/ethnicity field', () => {
+    const fields = [{ id: 'race_field', name: 'race', label: 'Race / Ethnicity' }];
+    const enhanced = greenhouse.enhanceExtraction(fields);
+    expect(enhanced[0].atsHint).toBe('eeo_race_ethnicity');
+  });
+
+  it('enhanceExtraction tags veteran status field', () => {
+    const fields = [{ id: 'vet_field', name: 'veteran', label: 'Veteran Status' }];
+    const enhanced = greenhouse.enhanceExtraction(fields);
+    expect(enhanced[0].atsHint).toBe('eeo_veteran_status');
+  });
+
+  it('enhanceExtraction tags disability status field', () => {
+    const fields = [{ id: 'dis_field', name: 'disability', label: 'Disability Status' }];
+    const enhanced = greenhouse.enhanceExtraction(fields);
+    expect(enhanced[0].atsHint).toBe('eeo_disability_status');
+  });
+
+  it('enhanceExtraction tags Hispanic/Latino field', () => {
+    const fields = [{ id: 'hisp_field', name: '', label: 'Are you Hispanic or Latino?' }];
+    const enhanced = greenhouse.enhanceExtraction(fields);
+    expect(enhanced[0].atsHint).toBe('eeo_hispanic_latino');
+  });
+
+  it('enhanceExtraction does not override resume atsHint with EEO', () => {
+    const fields = [{ id: 'resume_text', name: 'resume', label: 'Resume' }];
+    const enhanced = greenhouse.enhanceExtraction(fields);
+    expect(enhanced[0].atsHint).toBe('resume_upload');
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════

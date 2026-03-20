@@ -319,6 +319,23 @@
     return fields;
   }
 
+  // ─── Post-extraction field enrichment ──────────────────────────
+
+  function enrichFieldHints(fields) {
+    for (const field of fields) {
+      // Detect country code selects by dial-code options like "(+1)", "(+44)"
+      if (field.tag === 'select' && field.options?.length > 5) {
+        const dialCodeCount = field.options.filter(o =>
+          /\(\+\d{1,4}\)/.test(o.text || o.value || '')
+        ).length;
+        if (dialCodeCount > 5 && !/country.?code/i.test(`${field.label} ${field.name} ${field.id}`)) {
+          field.label = field.label ? `${field.label} (phone country code)` : 'phone country code';
+        }
+      }
+    }
+    return fields;
+  }
+
   // ─── Form HTML serialization ──────────────────────────────────
 
   function serializeFormHtml() {
@@ -2254,7 +2271,19 @@
         }
 
         // Extract structured fields for more reliable AI analysis
-        const structuredFields = extractFormData(formRoot);
+        let structuredFields = extractFormData(formRoot);
+
+        // Enrich field hints (e.g. detect dial-code selects as country code fields)
+        structuredFields = enrichFieldHints(structuredFields);
+
+        // Apply ATS-specific field enhancement if adapter provides it
+        if (atsAdapter?.enhanceExtraction) {
+          try {
+            structuredFields = atsAdapter.enhanceExtraction(structuredFields);
+          } catch (err) {
+            console.warn('[CareerPulse] ATS enhanceExtraction failed:', err.message);
+          }
+        }
 
         // Debug: log extracted fields so we can diagnose fill issues
         console.log('[CareerPulse] Extracted fields:', structuredFields.map(f => ({
@@ -3097,6 +3126,7 @@
       fuzzyMatchDropdownOption,
       fuzzyMatchOption,
       getFieldHints,
+      enrichFieldHints,
       looksLikePhoneNumber,
       isPhoneField,
       isPhoneExtensionField,
