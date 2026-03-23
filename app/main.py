@@ -80,7 +80,7 @@ async def lifespan(app: FastAPI):
     if not testing:
         from app.config import Settings
         from app.scrapers import ALL_SCRAPERS
-        from app.scheduler import run_scrape_cycle, run_enrichment_cycle, run_maintenance_cycle, run_reminder_check, run_digest_cycle, run_alert_check, run_job_embedding_cycle, run_context_embedding_cycle
+        from app.scheduler import run_scrape_cycle, run_enrichment_cycle, run_maintenance_cycle, run_reminder_check, run_digest_cycle, run_alert_check, run_job_embedding_cycle, run_context_embedding_cycle, run_location_classification
 
         settings = Settings()
 
@@ -138,6 +138,7 @@ async def lifespan(app: FastAPI):
 
         async def scheduled_scoring():
             try:
+                await run_location_classification(app.state.bg_db, app.state.ai_client)
                 await app.state.score_unscored(app.state.bg_db)
             except Exception:
                 logger.exception("Scheduled scoring failed")
@@ -285,11 +286,19 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
                 return
             app.state.scoring_progress = {"scored": 0, "total": total, "active": True}
             scored = 0
+            empty_batches = 0
             batch_size = 5
             try:
                 for i in range(0, total, batch_size):
                     batch = all_unscored[i:i + batch_size]
                     results = await matcher.score_batch(batch)
+                    if not results:
+                        empty_batches += 1
+                        if empty_batches >= 2:
+                            logger.warning("Multiple consecutive empty batches — AI provider likely down, stopping scoring")
+                            break
+                        continue
+                    empty_batches = 0
                     for r in results:
                         await db.insert_score(
                             r["job_id"], r["score"], r["reasons"],

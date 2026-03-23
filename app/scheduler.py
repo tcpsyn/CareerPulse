@@ -44,7 +44,20 @@ async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str]
             logger.error(f"Scraper {source_name} failed: {e}")
             continue
 
+        # Pre-filter: skip listings from disallowed regions at scrape time
+        from app.location_classifier import classify_location_rule_based
+        allowed_regions = await db.get_allowed_regions()
+        allowed_set = {r.lower() for r in allowed_regions}
+        # Also allow unknown/ambiguous through (conservative)
+        skipped_region = 0
+
         for listing in listings:
+            # Quick rule-based check before inserting
+            region = classify_location_rule_based(listing.location)
+            if region is not None and region.lower() not in allowed_set:
+                skipped_region += 1
+                continue
+
             dedup = make_dedup_hash(listing.title, listing.company, listing.url)
             existing = await db.find_job_by_hash(dedup)
             if existing:
@@ -75,8 +88,14 @@ async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str]
                     else:
                         await db.insert_source(job_id, source_name, listing.url)
                         total_new += 1
+                    # Pre-classify if rule-based matched
+                    if region is not None:
+                        await db.set_job_location_region(job_id, region)
 
-        logger.info(f"{source_name}: found {len(listings)} listings")
+        if skipped_region:
+            logger.info(f"{source_name}: found {len(listings)} listings, skipped {skipped_region} outside allowed regions")
+        else:
+            logger.info(f"{source_name}: found {len(listings)} listings")
 
         # Health tracking: warn on consecutive zero-result runs
         if len(listings) == 0:
@@ -96,6 +115,73 @@ async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str]
         progress.update({"completed": total_scrapers, "total": total_scrapers, "current": None, "new_jobs": total_new, "active": False})
     logger.info(f"Scrape cycle complete. {total_new} new jobs added.")
     return total_new
+
+
+async def run_location_classification(db: Database, ai_client=None) -> int:
+    """Classify job locations and dismiss jobs outside allowed regions.
+
+    Two-pass system:
+    1. Rule-based classification (no API cost)
+    2. LLM classification for ambiguous locations (batched)
+    Then dismiss jobs outside allowed regions.
+    """
+    from app.location_classifier import classify_location_rule_based, classify_locations_llm
+
+    total_classified = 0
+    while True:
+        jobs = await db.get_unclassified_jobs(limit=500)
+        if not jobs:
+            break
+
+        classified = 0
+        ambiguous = []
+        batch_updates = []
+
+        # Pass 1: rule-based
+        for job in jobs:
+            region = classify_location_rule_based(job.get("location", ""))
+            if region is not None:
+                batch_updates.append((job["id"], region))
+                classified += 1
+            else:
+                ambiguous.append((job["id"], job.get("location", "")))
+            await asyncio.sleep(0)
+
+        # Write rule-based results
+        if batch_updates:
+            await db.set_job_location_regions_batch(batch_updates)
+
+        # Pass 2: LLM for ambiguous
+        if ambiguous and ai_client:
+            try:
+                llm_results = await classify_locations_llm(ai_client, ambiguous)
+                if llm_results:
+                    await db.set_job_location_regions_batch(llm_results)
+                    classified += len(llm_results)
+            except Exception as e:
+                logger.warning(f"LLM location classification failed: {e}")
+                # Mark ambiguous as Unknown (not dismissed)
+                fallback = [(job_id, "Unknown") for job_id, _ in ambiguous]
+                await db.set_job_location_regions_batch(fallback)
+                classified += len(fallback)
+        elif ambiguous:
+            # No AI client — mark as Unknown (conservative, won't be dismissed)
+            fallback = [(job_id, "Unknown") for job_id, _ in ambiguous]
+            await db.set_job_location_regions_batch(fallback)
+            classified += len(fallback)
+
+        total_classified += classified
+        await asyncio.sleep(0)
+
+    # Pass 3: dismiss outside allowed regions
+    allowed = await db.get_allowed_regions()
+    # Also keep "Unknown" jobs (conservative — don't dismiss what we can't classify)
+    allowed_with_unknown = allowed + ["Unknown"]
+    dismissed = await db.dismiss_jobs_outside_regions(allowed_with_unknown)
+
+    if total_classified:
+        logger.info(f"Location classification: {total_classified} jobs classified, {dismissed} dismissed")
+    return total_classified
 
 
 async def run_enrichment_cycle(db: Database, limit: int = 30) -> int:

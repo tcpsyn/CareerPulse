@@ -969,6 +969,37 @@ function renderTabJobSearch(container, config, profile, customQA) {
         </div>
 
         <div class="card" style="padding:24px;margin-bottom:24px">
+            <h2 style="font-size:1.125rem;font-weight:600;margin-bottom:16px">Allowed Regions</h2>
+            <p style="color:var(--text-secondary);margin-bottom:16px;font-size:0.875rem">
+                Only jobs in these regions will be scored and shown. Jobs outside allowed regions are auto-dismissed.
+            </p>
+            <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:12px">
+                ${[
+                    { value: 'US', label: 'United States' },
+                    { value: 'Remote', label: 'Remote / Global' },
+                    { value: 'Canada', label: 'Canada' },
+                    { value: 'UK', label: 'United Kingdom' },
+                    { value: 'Germany', label: 'Germany' },
+                    { value: 'Ireland', label: 'Ireland' },
+                    { value: 'Netherlands', label: 'Netherlands' },
+                    { value: 'Australia', label: 'Australia' },
+                ].map(r => `<label style="display:flex;align-items:center;gap:6px;font-size:0.875rem;cursor:pointer">
+                    <input type="checkbox" class="region-checkbox" value="${r.value}" ${(config.allowed_regions || ['US','Remote']).includes(r.value) ? 'checked' : ''}>
+                    ${escapeHtml(r.label)}
+                </label>`).join('')}
+            </div>
+            <div style="margin-bottom:12px">
+                <label style="display:block;font-size:0.8125rem;font-weight:600;color:var(--text-tertiary);margin-bottom:4px">Additional regions (one per line)</label>
+                <textarea class="textarea-styled" id="custom-regions-textarea" rows="3" placeholder="e.g. France&#10;Singapore">${escapeHtml(
+                    (config.allowed_regions || []).filter(r => !['US','Remote','Canada','UK','Germany','Ireland','Netherlands','Australia'].includes(r)).join('\n')
+                )}</textarea>
+            </div>
+            <div style="display:flex;gap:12px">
+                <button class="btn btn-primary" id="save-regions-btn">Save Allowed Regions</button>
+            </div>
+        </div>
+
+        <div class="card" style="padding:24px;margin-bottom:24px">
             <h2 style="font-size:1.125rem;font-weight:600;margin-bottom:16px">Salary Preferences</h2>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
                 ${settingsField('Minimum Salary', 'js-sal-min', profile.desired_salary_min, 'number')}
@@ -1061,6 +1092,17 @@ function renderTabJobSearch(container, config, profile, customQA) {
         try {
             await api.request('POST', '/api/search-config/exclude-terms', { exclude_terms: terms });
             showToast(`Saved ${terms.length} exclude terms`, 'success');
+        } catch (err) { showToast(err.message, 'error'); }
+    });
+
+    document.getElementById('save-regions-btn').addEventListener('click', async () => {
+        const checked = Array.from(document.querySelectorAll('.region-checkbox:checked')).map(cb => cb.value);
+        const custom = document.getElementById('custom-regions-textarea').value.split('\n').map(t => t.trim()).filter(Boolean);
+        const regions = [...new Set([...checked, ...custom])];
+        try {
+            await api.request('POST', '/api/search-config/allowed-regions', { allowed_regions: regions });
+            if (settingsData.config) settingsData.config.allowed_regions = regions;
+            showToast(`Saved ${regions.length} allowed regions`, 'success');
         } catch (err) { showToast(err.message, 'error'); }
     });
 

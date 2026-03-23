@@ -596,6 +596,7 @@ class Database:
             "ats_issues": "ALTER TABLE search_config ADD COLUMN ats_issues TEXT NOT NULL DEFAULT '[]'",
             "ats_tips": "ALTER TABLE search_config ADD COLUMN ats_tips TEXT NOT NULL DEFAULT '[]'",
             "exclude_terms": "ALTER TABLE search_config ADD COLUMN exclude_terms TEXT NOT NULL DEFAULT '[]'",
+            "allowed_regions": "ALTER TABLE search_config ADD COLUMN allowed_regions TEXT NOT NULL DEFAULT '[\"US\",\"Remote\"]'",
         }
         for col, sql in migrations.items():
             if col not in columns:
@@ -617,6 +618,8 @@ class Database:
             "enrichment_status": "ALTER TABLE jobs ADD COLUMN enrichment_status TEXT DEFAULT 'pending'",
             "enrichment_attempts": "ALTER TABLE jobs ADD COLUMN enrichment_attempts INTEGER DEFAULT 0",
             "last_seen_at": "ALTER TABLE jobs ADD COLUMN last_seen_at TEXT",
+            "location_region": "ALTER TABLE jobs ADD COLUMN location_region TEXT",
+            "location_classified": "ALTER TABLE jobs ADD COLUMN location_classified INTEGER DEFAULT 0",
         }
         for col, sql in jobs_migrations.items():
             if col not in jobs_columns:
@@ -879,6 +882,20 @@ class Database:
              json.dumps(suggested_keywords), now)
         )
         await self.db.commit()
+
+    async def clear_failed_scores(self) -> int:
+        """Remove score=0 entries that were created by transient errors, so jobs can be rescored."""
+        cursor = await self.db.execute(
+            """DELETE FROM job_scores
+               WHERE match_score = 0
+               AND (concerns LIKE '%unavailable%'
+                    OR concerns LIKE '%unreachable%'
+                    OR concerns LIKE '%Scoring error%'
+                    OR concerns LIKE '%circuit breaker%'
+                    OR concerns LIKE '%rate limit%')"""
+        )
+        await self.db.commit()
+        return cursor.rowcount
 
     async def get_score(self, job_id):
         cursor = await self.db.execute("SELECT * FROM job_scores WHERE job_id = ?", (job_id,))
@@ -1185,7 +1202,8 @@ class Database:
         cursor = await self.db.execute(
             """SELECT j.* FROM jobs j
                LEFT JOIN job_scores js ON j.id = js.job_id
-               WHERE js.id IS NULL AND j.dismissed = 0 LIMIT ?""", (limit,)
+               WHERE js.id IS NULL AND j.dismissed = 0
+               AND j.location_classified = 1 LIMIT ?""", (limit,)
         )
         rows = await cursor.fetchall()
         return [dict(r) for r in rows]
@@ -1227,6 +1245,7 @@ class Database:
         d["ats_issues"] = json.loads(d["ats_issues"])
         d["ats_tips"] = json.loads(d["ats_tips"])
         d["exclude_terms"] = json.loads(d.get("exclude_terms", "[]"))
+        d["allowed_regions"] = json.loads(d.get("allowed_regions", '["US","Remote"]'))
         return d
 
     async def save_search_config(self, resume_text: str, search_terms: list[str],
@@ -1269,6 +1288,65 @@ class Database:
         await self.db.execute(
             "UPDATE search_config SET search_terms = ?, updated_at = ? WHERE id = 1",
             (json.dumps(search_terms), now)
+        )
+        await self.db.commit()
+
+    async def get_unclassified_jobs(self, limit=500):
+        cursor = await self.db.execute(
+            """SELECT id, location FROM jobs
+               WHERE location_classified = 0 AND dismissed = 0
+               LIMIT ?""", (limit,)
+        )
+        rows = await cursor.fetchall()
+        return [dict(r) for r in rows]
+
+    async def set_job_location_region(self, job_id: int, region: str):
+        await self.db.execute(
+            "UPDATE jobs SET location_region = ?, location_classified = 1 WHERE id = ?",
+            (region, job_id)
+        )
+        await self.db.commit()
+
+    async def set_job_location_regions_batch(self, updates: list[tuple[int, str]]):
+        """Batch update location_region and mark as classified."""
+        await self.db.executemany(
+            "UPDATE jobs SET location_region = ?, location_classified = 1 WHERE id = ?",
+            [(region, job_id) for job_id, region in updates]
+        )
+        await self.db.commit()
+
+    async def dismiss_jobs_outside_regions(self, allowed_regions: list[str]) -> int:
+        """Dismiss classified jobs outside allowed regions, respecting active applications."""
+        if not allowed_regions:
+            return 0
+        placeholders = ",".join("?" for _ in allowed_regions)
+        cursor = await self.db.execute(
+            f"""UPDATE jobs SET dismissed = 1
+                WHERE dismissed = 0
+                AND location_classified = 1
+                AND location_region NOT IN ({placeholders})
+                AND id NOT IN (
+                    SELECT job_id FROM applications WHERE status != 'interested'
+                )""",
+            allowed_regions
+        )
+        await self.db.commit()
+        return cursor.rowcount
+
+    async def get_allowed_regions(self) -> list[str]:
+        cursor = await self.db.execute(
+            "SELECT allowed_regions FROM search_config WHERE id = 1"
+        )
+        row = await cursor.fetchone()
+        if not row or not row["allowed_regions"]:
+            return ["US", "Remote"]
+        return json.loads(row["allowed_regions"])
+
+    async def update_allowed_regions(self, regions: list[str]):
+        now = datetime.now(timezone.utc).isoformat()
+        await self.db.execute(
+            "UPDATE search_config SET allowed_regions = ?, updated_at = ? WHERE id = 1",
+            (json.dumps(regions), now)
         )
         await self.db.commit()
 

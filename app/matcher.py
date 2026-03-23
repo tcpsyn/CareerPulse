@@ -66,7 +66,8 @@ class JobMatcher:
         self.client = client
         self.resume_text = resume_text
 
-    async def score_job(self, job_description: str, resume_text: str | None = None) -> dict:
+    async def score_job(self, job_description: str, resume_text: str | None = None) -> dict | None:
+        """Score a job against the resume. Returns None on transient failures."""
         try:
             prompt = SCORING_PROMPT.format(
                 resume=resume_text or self.resume_text,
@@ -77,21 +78,21 @@ class JobMatcher:
         except Exception as e:
             provider = getattr(self.client, "provider", "unknown")
             base_url = getattr(self.client, "base_url", "")
-            if "connect" in str(e).lower() or "refused" in str(e).lower():
+            err_str = str(e).lower()
+            if "connect" in err_str or "refused" in err_str:
                 msg = f"{provider} unreachable at {base_url}"
-            elif "circuit breaker" in str(e).lower():
+            elif "circuit breaker" in err_str:
                 msg = f"{provider} unavailable (too many failures, will retry after cooldown)"
+            elif "rate" in err_str and "limit" in err_str:
+                msg = f"{provider} rate limited"
             else:
                 msg = f"Scoring error: {e}"
             logger.error(f"Scoring failed: {msg}")
-            return {
-                "score": 0,
-                "reasons": [],
-                "concerns": [msg],
-                "keywords": [],
-            }
+            # Return None for transient errors so caller can skip/retry
+            return None
 
     async def score_batch(self, jobs: list[dict]) -> list[dict]:
+        """Score a batch of jobs. Returns only successful results (no None entries)."""
         jobs_block = "\n\n".join(
             f"--- JOB {i} ---\n{job['description']}"
             for i, job in enumerate(jobs)
@@ -139,8 +140,16 @@ class JobMatcher:
 
     async def _fallback_individual(self, jobs: list[dict]) -> list[dict]:
         results = []
+        consecutive_failures = 0
         for job in jobs:
             result = await self.score_job(job["description"])
+            if result is None:
+                consecutive_failures += 1
+                if consecutive_failures >= 3:
+                    logger.warning("3 consecutive scoring failures, aborting batch fallback")
+                    break
+                continue
+            consecutive_failures = 0
             result["job_id"] = job["id"]
             results.append(result)
             await asyncio.sleep(0)  # Yield between individual scores
@@ -150,6 +159,8 @@ class JobMatcher:
         results = []
         for job in jobs:
             result = await self.score_job(job["description"])
+            if result is None:
+                continue
             result["job_id"] = job["id"]
             results.append(result)
             if job != jobs[-1] and delay > 0:

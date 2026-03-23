@@ -37,7 +37,7 @@ async def test_matcher_handles_bad_json():
 
     matcher = JobMatcher(client=mock_client, resume_text=SAMPLE_RESUME)
     result = await matcher.score_job(SAMPLE_JOB_DESC)
-    assert result["score"] == 0
+    assert result is None  # Transient errors return None, not score=0
 
 @pytest.mark.asyncio
 async def test_matcher_handles_api_error():
@@ -46,7 +46,7 @@ async def test_matcher_handles_api_error():
 
     matcher = JobMatcher(client=mock_client, resume_text=SAMPLE_RESUME)
     result = await matcher.score_job(SAMPLE_JOB_DESC)
-    assert result["score"] == 0
+    assert result is None  # Transient errors return None, not score=0
 
 @pytest.mark.asyncio
 async def test_matcher_batch_score():

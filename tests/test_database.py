@@ -122,6 +122,8 @@ async def test_get_unscored_jobs(db):
         url="https://example.com/unscored", posted_date=None,
         application_method="url", contact_email=None,
     )
+    # Job must be location-classified before it appears as unscored
+    await db.set_job_location_region(job_id, "Remote")
     unscored = await db.get_unscored_jobs(limit=10)
     assert len(unscored) == 1
     assert unscored[0]["id"] == job_id

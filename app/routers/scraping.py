@@ -81,7 +81,7 @@ async def trigger_scrape(request: Request):
         async with app.state.scrape_lock:
             try:
                 from app.scrapers import ALL_SCRAPERS
-                from app.scheduler import run_scrape_cycle, run_enrichment_cycle
+                from app.scheduler import run_scrape_cycle, run_enrichment_cycle, run_location_classification
                 from app.ai_client import check_ai_reachable
 
                 bg_db = app.state.bg_db
@@ -95,6 +95,7 @@ async def trigger_scrape(request: Request):
                 await run_enrichment_cycle(bg_db)
 
                 ai_client = getattr(app.state, "ai_client", None)
+                await run_location_classification(bg_db, ai_client)
                 if ai_client:
                     reachable, detail = await check_ai_reachable(ai_client)
                     if reachable:
@@ -166,6 +167,26 @@ async def score_progress(request: Request):
     if not progress:
         return {"active": False, "scored": 0, "total": 0}
     return progress
+
+
+@router.post("/rescore-failed")
+async def rescore_failed(request: Request):
+    """Clear error scores (score=0 from transient failures) and trigger rescoring."""
+    app = request.app
+    bg_db = getattr(app.state, "bg_db", app.state.db)
+    cleared = await bg_db.clear_failed_scores()
+    if cleared and getattr(app.state, "ai_client", None):
+        async def _run_rescore():
+            try:
+                await asyncio.wait_for(
+                    app.state.score_unscored(bg_db), timeout=1800
+                )
+            except asyncio.TimeoutError:
+                logger.error("Background rescoring timed out")
+            except Exception:
+                logger.exception("Background rescoring failed")
+        asyncio.create_task(_run_rescore())
+    return {"cleared": cleared, "rescoring": cleared > 0 and getattr(app.state, "ai_client", None) is not None}
 
 
 @router.post("/dismiss-stale")

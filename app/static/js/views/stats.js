@@ -10,6 +10,7 @@ async function renderStats(container) {
                 <div style="display:flex;gap:8px">
                     <button class="btn btn-primary" id="stats-scrape-btn">Scrape Now</button>
                     <button class="btn btn-secondary" id="stats-score-btn">${stats.total_jobs - stats.total_scored > 0 ? `Score ${stats.total_jobs - stats.total_scored} Unscored` : 'All Scored'}</button>
+                    <button class="btn btn-secondary" id="stats-rescore-btn" title="Clear failed scores (score=0 from errors) and rescore them">Rescore Failed</button>
                     <button class="btn btn-secondary" id="stats-export-btn">Export CSV</button>
                 </div>
             </div>
@@ -143,6 +144,28 @@ async function renderStats(container) {
                 scoreBtn.disabled = false;
                 scoreBtn.textContent = 'Score';
                 showToast(err.message, 'error');
+            }
+        });
+        document.getElementById('stats-rescore-btn').addEventListener('click', async () => {
+            const btn = document.getElementById('stats-rescore-btn');
+            btn.disabled = true;
+            btn.innerHTML = '<span class="spinner"></span> Clearing...';
+            try {
+                const res = await api.request('POST', '/api/rescore-failed');
+                if (res.cleared === 0) {
+                    showToast('No failed scores to clear', 'info');
+                    btn.disabled = false;
+                    btn.textContent = 'Rescore Failed';
+                } else {
+                    showToast(`Cleared ${res.cleared} failed scores, rescoring...`, 'success');
+                    if (res.rescoring) startScoringPoll();
+                    btn.disabled = false;
+                    btn.textContent = 'Rescore Failed';
+                }
+            } catch (err) {
+                showToast(err.message, 'error');
+                btn.disabled = false;
+                btn.textContent = 'Rescore Failed';
             }
         });
         // Check if scoring is already in progress

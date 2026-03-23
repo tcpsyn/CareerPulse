@@ -282,7 +282,8 @@ async def get_search_config(request: Request):
         return {"resume_text": "", "search_terms": [], "job_titles": [],
                 "key_skills": [], "seniority": "", "summary": "",
                 "ats_score": 0, "ats_issues": [], "ats_tips": [],
-                "exclude_terms": [], "updated_at": None}
+                "exclude_terms": [], "allowed_regions": ["US", "Remote"],
+                "updated_at": None}
     return config
 
 
@@ -304,6 +305,22 @@ async def update_exclude_terms(request: Request):
         raise HTTPException(400, "exclude_terms must be a list")
     await request.app.state.db.update_exclude_terms(terms)
     return {"ok": True, "exclude_terms": terms}
+
+
+@router.get("/search-config/allowed-regions")
+async def get_allowed_regions(request: Request):
+    regions = await request.app.state.db.get_allowed_regions()
+    return {"allowed_regions": regions}
+
+
+@router.post("/search-config/allowed-regions")
+async def update_allowed_regions(request: Request):
+    body = await request.json()
+    regions = body.get("allowed_regions", [])
+    if not isinstance(regions, list):
+        raise HTTPException(400, "allowed_regions must be a list")
+    await request.app.state.db.update_allowed_regions(regions)
+    return {"ok": True, "allowed_regions": regions}
 
 
 @router.get("/ai-settings")

@@ -41,16 +41,14 @@ async def test_score_job_connection_error(mock_client):
     mock_client.chat = AsyncMock(side_effect=Exception("Connection refused"))
     matcher = JobMatcher(mock_client, SAMPLE_RESUME)
     result = await matcher.score_job("Some job")
-    assert result["score"] == 0
-    assert any("unreachable" in c for c in result["concerns"])
+    assert result is None  # Transient errors return None
 
 
 async def test_score_job_circuit_breaker_error(mock_client):
     mock_client.chat = AsyncMock(side_effect=Exception("circuit breaker open"))
     matcher = JobMatcher(mock_client, SAMPLE_RESUME)
     result = await matcher.score_job("Some job")
-    assert result["score"] == 0
-    assert any("unavailable" in c for c in result["concerns"])
+    assert result is None  # Transient errors return None
 
 
 async def test_score_job_empty_description(mock_client):
