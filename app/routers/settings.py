@@ -283,7 +283,7 @@ async def get_search_config(request: Request):
                 "key_skills": [], "seniority": "", "summary": "",
                 "ats_score": 0, "ats_issues": [], "ats_tips": [],
                 "exclude_terms": [], "allowed_regions": ["US", "Remote"],
-                "updated_at": None}
+                "remote_only": False, "updated_at": None}
     return config
 
 
@@ -321,6 +321,22 @@ async def update_allowed_regions(request: Request):
         raise HTTPException(400, "allowed_regions must be a list")
     await request.app.state.db.update_allowed_regions(regions)
     return {"ok": True, "allowed_regions": regions}
+
+
+@router.get("/search-config/remote-only")
+async def get_remote_only(request: Request):
+    enabled = await request.app.state.db.get_remote_only()
+    return {"remote_only": enabled}
+
+
+@router.post("/search-config/remote-only")
+async def update_remote_only(request: Request):
+    body = await request.json()
+    enabled = body.get("remote_only", False)
+    if not isinstance(enabled, bool):
+        raise HTTPException(400, "remote_only must be a boolean")
+    await request.app.state.db.set_remote_only(enabled)
+    return {"ok": True, "remote_only": enabled}
 
 
 @router.get("/ai-settings")

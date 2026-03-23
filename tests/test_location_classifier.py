@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from app.location_classifier import classify_location_rule_based, classify_locations_llm
+from app.location_classifier import classify_location_rule_based, classify_locations_llm, classify_work_type
 
 
 class TestRuleBased:
@@ -136,3 +136,61 @@ class TestLLMClassifier:
         mock_client = MagicMock()
         result = await classify_locations_llm(mock_client, [])
         assert result == []
+
+
+class TestClassifyWorkType:
+    """Test classify_work_type."""
+
+    # Remote signals from location
+    @pytest.mark.parametrize("location,expected", [
+        ("Remote", "remote"),
+        ("Fully Remote", "remote"),
+        ("Work from home", "remote"),
+        ("Anywhere", "remote"),
+        ("Remote - US", "remote"),
+    ])
+    def test_remote_location(self, location, expected):
+        assert classify_work_type(location) == expected
+
+    # Remote signal from title
+    def test_remote_title(self):
+        assert classify_work_type("", "Remote Software Engineer") == "remote"
+
+    # Onsite signals
+    @pytest.mark.parametrize("location,expected", [
+        ("On-site - NYC", "onsite"),
+        ("onsite", "onsite"),
+        ("In-Office", "onsite"),
+        ("Office-Based", "onsite"),
+        ("New York, NY (in office)", "onsite"),
+    ])
+    def test_onsite(self, location, expected):
+        assert classify_work_type(location) == expected
+
+    # Hybrid signals
+    @pytest.mark.parametrize("location,expected", [
+        ("Hybrid - NYC", "hybrid"),
+        ("hybrid", "hybrid"),
+        ("New York (Hybrid)", "hybrid"),
+    ])
+    def test_hybrid(self, location, expected):
+        assert classify_work_type(location) == expected
+
+    # Mixed: remote + hybrid → hybrid wins
+    def test_remote_hybrid_mixed(self):
+        assert classify_work_type("Remote / Hybrid") == "hybrid"
+
+    # Ambiguous — no signals
+    @pytest.mark.parametrize("location", [
+        "San Francisco, CA",
+        "New York, NY",
+        "Austin, TX",
+        "Flexible",
+    ])
+    def test_ambiguous_returns_none(self, location):
+        assert classify_work_type(location) is None
+
+    # Empty inputs
+    def test_empty_returns_none(self):
+        assert classify_work_type("") is None
+        assert classify_work_type("", "") is None

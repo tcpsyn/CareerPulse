@@ -45,11 +45,13 @@ async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str]
             continue
 
         # Pre-filter: skip listings from disallowed regions at scrape time
-        from app.location_classifier import classify_location_rule_based
+        from app.location_classifier import classify_location_rule_based, classify_work_type
         allowed_regions = await db.get_allowed_regions()
         allowed_set = {r.lower() for r in allowed_regions}
+        remote_only = await db.get_remote_only()
         # Also allow unknown/ambiguous through (conservative)
         skipped_region = 0
+        skipped_work_type = 0
 
         for listing in listings:
             # Quick rule-based check before inserting
@@ -57,6 +59,12 @@ async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str]
             if region is not None and region.lower() not in allowed_set:
                 skipped_region += 1
                 continue
+
+            if remote_only:
+                work_type = classify_work_type(listing.location, listing.title)
+                if work_type is not None and work_type != "remote":
+                    skipped_work_type += 1
+                    continue
 
             dedup = make_dedup_hash(listing.title, listing.company, listing.url)
             existing = await db.find_job_by_hash(dedup)
@@ -92,8 +100,13 @@ async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str]
                     if region is not None:
                         await db.set_job_location_region(job_id, region)
 
+        skip_parts = []
         if skipped_region:
-            logger.info(f"{source_name}: found {len(listings)} listings, skipped {skipped_region} outside allowed regions")
+            skip_parts.append(f"{skipped_region} outside allowed regions")
+        if skipped_work_type:
+            skip_parts.append(f"{skipped_work_type} non-remote")
+        if skip_parts:
+            logger.info(f"{source_name}: found {len(listings)} listings, skipped {', '.join(skip_parts)}")
         else:
             logger.info(f"{source_name}: found {len(listings)} listings")
 

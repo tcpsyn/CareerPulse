@@ -597,6 +597,7 @@ class Database:
             "ats_tips": "ALTER TABLE search_config ADD COLUMN ats_tips TEXT NOT NULL DEFAULT '[]'",
             "exclude_terms": "ALTER TABLE search_config ADD COLUMN exclude_terms TEXT NOT NULL DEFAULT '[]'",
             "allowed_regions": "ALTER TABLE search_config ADD COLUMN allowed_regions TEXT NOT NULL DEFAULT '[\"US\",\"Remote\"]'",
+            "remote_only": "ALTER TABLE search_config ADD COLUMN remote_only INTEGER NOT NULL DEFAULT 0",
         }
         for col, sql in migrations.items():
             if col not in columns:
@@ -1246,6 +1247,7 @@ class Database:
         d["ats_tips"] = json.loads(d["ats_tips"])
         d["exclude_terms"] = json.loads(d.get("exclude_terms", "[]"))
         d["allowed_regions"] = json.loads(d.get("allowed_regions", '["US","Remote"]'))
+        d["remote_only"] = bool(d.get("remote_only", 0))
         return d
 
     async def save_search_config(self, resume_text: str, search_terms: list[str],
@@ -1347,6 +1349,23 @@ class Database:
         await self.db.execute(
             "UPDATE search_config SET allowed_regions = ?, updated_at = ? WHERE id = 1",
             (json.dumps(regions), now)
+        )
+        await self.db.commit()
+
+    async def get_remote_only(self) -> bool:
+        cursor = await self.db.execute(
+            "SELECT remote_only FROM search_config WHERE id = 1"
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return False
+        return bool(row["remote_only"])
+
+    async def set_remote_only(self, enabled: bool):
+        now = datetime.now(timezone.utc).isoformat()
+        await self.db.execute(
+            "UPDATE search_config SET remote_only = ?, updated_at = ? WHERE id = 1",
+            (1 if enabled else 0, now)
         )
         await self.db.commit()
 

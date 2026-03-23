@@ -1000,6 +1000,18 @@ function renderTabJobSearch(container, config, profile, customQA) {
         </div>
 
         <div class="card" style="padding:24px;margin-bottom:24px">
+            <h2 style="font-size:1.125rem;font-weight:600;margin-bottom:16px">Remote Only</h2>
+            <p style="color:var(--text-secondary);margin-bottom:16px;font-size:0.875rem">
+                When enabled, on-site and hybrid jobs are dropped at scrape time and never stored or scored.
+            </p>
+            <label style="display:flex;align-items:center;gap:8px;font-size:0.875rem;cursor:pointer;margin-bottom:12px">
+                <input type="checkbox" id="remote-only-checkbox" ${config.remote_only ? 'checked' : ''}>
+                Remote jobs only
+            </label>
+            <button class="btn btn-primary" id="save-remote-only-btn">Save</button>
+        </div>
+
+        <div class="card" style="padding:24px;margin-bottom:24px">
             <h2 style="font-size:1.125rem;font-weight:600;margin-bottom:16px">Salary Preferences</h2>
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
                 ${settingsField('Minimum Salary', 'js-sal-min', profile.desired_salary_min, 'number')}
@@ -1103,6 +1115,15 @@ function renderTabJobSearch(container, config, profile, customQA) {
             await api.request('POST', '/api/search-config/allowed-regions', { allowed_regions: regions });
             if (settingsData.config) settingsData.config.allowed_regions = regions;
             showToast(`Saved ${regions.length} allowed regions`, 'success');
+        } catch (err) { showToast(err.message, 'error'); }
+    });
+
+    document.getElementById('save-remote-only-btn').addEventListener('click', async () => {
+        const enabled = document.getElementById('remote-only-checkbox').checked;
+        try {
+            await api.request('POST', '/api/search-config/remote-only', { remote_only: enabled });
+            if (settingsData.config) settingsData.config.remote_only = enabled;
+            showToast(enabled ? 'Remote-only filtering enabled' : 'Remote-only filtering disabled', 'success');
         } catch (err) { showToast(err.message, 'error'); }
     });
 

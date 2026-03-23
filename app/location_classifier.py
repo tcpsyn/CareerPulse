@@ -74,6 +74,9 @@ _REMOTE_KEYWORDS = {
     "fully remote", "100% remote", "remote-first", "worldwide",
 }
 
+_ONSITE_KEYWORDS = {"on-site", "onsite", "on site", "in-office", "in office", "office-based"}
+_HYBRID_KEYWORDS = {"hybrid"}
+
 # US state abbreviations (from database.py _US_STATES)
 from app.database import _US_STATES
 
@@ -176,6 +179,31 @@ def classify_location_rule_based(location: str) -> str | None:
             return "US"
 
     # Nothing matched — ambiguous
+    return None
+
+
+def classify_work_type(location: str, title: str = "") -> str | None:
+    """Classify work type from location and title strings.
+
+    Returns:
+        "remote" — remote job
+        "onsite" — on-site/in-office job
+        "hybrid" — hybrid job
+        None — ambiguous, no clear signal
+    """
+    combined = f"{location or ''} {title or ''}".lower()
+
+    has_remote = any(kw in combined for kw in _REMOTE_KEYWORDS)
+    has_hybrid = any(kw in combined for kw in _HYBRID_KEYWORDS)
+    has_onsite = any(kw in combined for kw in _ONSITE_KEYWORDS)
+
+    # Hybrid takes priority (e.g. "remote/hybrid" = hybrid)
+    if has_hybrid:
+        return "hybrid"
+    if has_onsite:
+        return "onsite"
+    if has_remote:
+        return "remote"
     return None
 
 
