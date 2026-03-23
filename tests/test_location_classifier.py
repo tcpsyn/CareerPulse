@@ -107,6 +107,15 @@ class TestRuleBased:
     def test_canadian_provinces(self, loc):
         assert classify_location_rule_based(loc) == "Canada"
 
+    # "on-site" should NOT match Ontario
+    @pytest.mark.parametrize("loc,expected", [
+        ("Memphis, TN (on-site)", "US"),
+        ("Austin, TX on-site", "US"),
+        ("San Francisco, CA (on site)", "US"),
+    ])
+    def test_onsite_not_misclassified_as_canada(self, loc, expected):
+        assert classify_location_rule_based(loc) == expected
+
 
 class TestLLMClassifier:
     """Test classify_locations_llm."""

@@ -143,7 +143,9 @@ def classify_location_rule_based(location: str) -> str | None:
                 return country
 
     # Check for Canadian provinces before US state matching
-    parts = [p.strip() for p in re.split(r'[,\-/\s]+', loc_lower)]
+    # Use comma/dash/slash splitting (not whitespace) to avoid false positives
+    # like "on" from "on-site" matching Ontario
+    parts = [p.strip() for p in re.split(r'[,\-/]', loc_lower)]
     for part in parts:
         if part in _CANADIAN_PROVINCES:
             return "Canada"
