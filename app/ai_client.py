@@ -21,6 +21,21 @@ _ai_breaker = CircuitBreaker(failure_threshold=5, cooldown_seconds=300.0)
 RETRYABLE_STATUS_CODES = {429, 500, 502, 503}
 
 
+def _extract_retry_after(exc: BaseException) -> float | None:
+    """Extract retry-after seconds from a rate limit error's response headers."""
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    headers = getattr(response, "headers", {})
+    raw = headers.get("retry-after")
+    if raw is None:
+        return None
+    try:
+        return float(raw)
+    except (ValueError, TypeError):
+        return None
+
+
 def _is_retryable(exc: BaseException) -> bool:
     if isinstance(exc, httpx.HTTPStatusError):
         return exc.response.status_code in RETRYABLE_STATUS_CODES
@@ -45,10 +60,22 @@ def _is_retryable(exc: BaseException) -> bool:
     return False
 
 
+def _rate_limit_aware_wait(retry_state) -> float:
+    """Use retry-after header when available, otherwise exponential backoff."""
+    exc = retry_state.outcome.exception()
+    if exc is not None:
+        retry_after = _extract_retry_after(exc)
+        if retry_after is not None and retry_after > 0:
+            # Cap at 120s to avoid infinite waits from buggy headers
+            return min(retry_after, 120.0)
+    # Fall back to exponential jitter for non-rate-limit errors
+    return wait_exponential_jitter(initial=2, max=30)(retry_state)
+
+
 _ai_retry = retry(
     retry=retry_if_exception(_is_retryable),
     stop=stop_after_attempt(4),  # 1 initial + 3 retries
-    wait=wait_exponential_jitter(initial=2, max=30),
+    wait=_rate_limit_aware_wait,
     before_sleep=before_sleep_log(logger, logging.WARNING),
     reraise=True,
 )
@@ -137,7 +164,7 @@ class AIClient:
             return OPENAI_COMPAT_PROVIDERS[self.provider]["base_url"]
         return ""
 
-    async def chat(self, prompt: str, max_tokens: int = 1024, timeout: float = 60.0) -> str:
+    async def chat(self, prompt: str, max_tokens: int = 1024, timeout: float = 300.0) -> str:
         service = f"ai:{self.provider}"
         if _ai_breaker.is_open(service):
             raise RuntimeError(f"Circuit breaker open for {service}")
