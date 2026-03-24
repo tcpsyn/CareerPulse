@@ -849,7 +849,7 @@ class Database:
             """SELECT j.id, j.url, j.description, j.enrichment_attempts FROM jobs j
                INNER JOIN sources s ON s.job_id = j.id
                WHERE j.description_enriched = 0
-               AND (j.description IS NULL OR length(j.description) < 500)
+               AND (j.description IS NULL OR length(j.description) < 800)
                AND j.dismissed = 0
                AND NOT (j.enrichment_status = 'failed' AND j.enrichment_attempts >= 3)
                GROUP BY j.id
@@ -1177,7 +1177,7 @@ class Database:
             days = days_map.get(posted_within)
             if days:
                 cutoff = f"-{days} days"
-                query += " AND COALESCE(j.last_seen_at, j.posted_date, j.created_at) >= datetime('now', ?)"
+                query += " AND COALESCE(j.posted_date, j.created_at) >= datetime('now', ?)"
                 params.append(cutoff)
         if sort_by == "score":
             query += " ORDER BY js.match_score DESC NULLS LAST, COALESCE(j.last_seen_at, j.posted_date, j.created_at) DESC"

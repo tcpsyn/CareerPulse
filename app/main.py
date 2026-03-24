@@ -58,6 +58,7 @@ async def lifespan(app: FastAPI):
     app.state.db = Database(db_path)
     await app.state.db.init()
     await app.state.db.migrate_resume_from_search_config()
+    await app.state.db.migrate_normalize_posted_dates()
 
     # Separate DB connection for background tasks (scoring, scraping, enrichment)
     # so they don't block API request handling on the main connection.

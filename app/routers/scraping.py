@@ -121,6 +121,7 @@ async def trigger_scrape(request: Request):
             if app.state.scrape_progress:
                 app.state.scrape_progress["active"] = False
 
+    app.state.scrape_progress = {"completed": 0, "total": 0, "current": None, "new_jobs": 0, "active": True}
     asyncio.create_task(_scrape_with_timeout())
     return {"status": "triggered"}
 

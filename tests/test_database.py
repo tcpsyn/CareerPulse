@@ -190,3 +190,29 @@ async def test_dismiss_job(db):
     await db.dismiss_job(job_id)
     jobs = await db.list_jobs()
     assert len(jobs) == 0
+
+
+@pytest.mark.asyncio
+async def test_list_jobs_us_location_filter(db):
+    """United States filter should match state names and abbreviations."""
+    locations = {
+        "california_job": "San Francisco, California",
+        "abbrev_job": "Austin, TX",
+        "us_job": "United States",
+        "india_job": "Bengaluru, India",
+        "remote_us": "Remote - US",
+    }
+    for key, loc in locations.items():
+        await db.insert_job(
+            title=f"Job {key}", company="Co", location=loc,
+            salary_min=None, salary_max=None, description="d",
+            url=f"https://example.com/{key}", posted_date=None,
+            application_method="url", contact_email=None,
+        )
+    us_jobs = await db.list_jobs(location="United States")
+    us_locations = {j["location"] for j in us_jobs}
+    assert "San Francisco, California" in us_locations
+    assert "Austin, TX" in us_locations
+    assert "United States" in us_locations
+    assert "Remote - US" in us_locations
+    assert "Bengaluru, India" not in us_locations

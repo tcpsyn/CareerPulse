@@ -86,8 +86,13 @@ async def notification_stream(request: Request):
     async def event_generator():
         try:
             while True:
-                notif = await queue.get()
-                yield f"data: {json.dumps(notif)}\n\n"
+                if await request.is_disconnected():
+                    break
+                try:
+                    notif = await asyncio.wait_for(queue.get(), timeout=15)
+                    yield f"data: {json.dumps(notif)}\n\n"
+                except asyncio.TimeoutError:
+                    yield ": keepalive\n\n"
         except asyncio.CancelledError:
             pass
         finally:

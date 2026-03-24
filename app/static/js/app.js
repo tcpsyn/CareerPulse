@@ -209,11 +209,12 @@ function stopScrapePoll() {
 }
 function startScrapePoll() {
     stopScrapePoll();
-    const btn = document.getElementById('scrape-btn') || document.getElementById('stats-scrape-btn');
     scrapePollInterval = setInterval(async () => {
         try {
+            const btn = document.getElementById('scrape-btn') || document.getElementById('stats-scrape-btn');
             const p = await api.request('GET', '/api/scrape/progress');
             if (p.active && btn) {
+                btn.disabled = true;
                 const label = p.current ? `${p.current} (${p.completed}/${p.total})` : `${p.completed}/${p.total}`;
                 btn.innerHTML = `<span class="spinner"></span> ${label}`;
             } else if (!p.active) {
