@@ -56,6 +56,21 @@ def _build_dice_html(jobs):
 </body></html>"""
 
 
+def _build_detail_html(description: str):
+    """Build a mock Dice detail page with JSON-LD structured data."""
+    ld_json = json.dumps({"description": description})
+    return f"""<html><head>
+<script type="application/ld+json">{ld_json}</script>
+</head><body></body></html>"""
+
+
+DETAIL_HTML = _build_detail_html(
+    "This is a full job description with enough content to pass the length check. "
+    "The role involves working with cloud infrastructure and CI/CD pipelines. "
+    "Requirements include experience with AWS, Kubernetes, and Terraform."
+)
+
+
 @pytest.mark.httpx_mock(can_send_already_matched_responses=True)
 @pytest.mark.asyncio
 async def test_dice_parse(httpx_mock):
@@ -63,6 +78,10 @@ async def test_dice_parse(httpx_mock):
     httpx_mock.add_response(
         url=re.compile(r"https://www\.dice\.com/jobs\?.*"),
         text=html,
+    )
+    httpx_mock.add_response(
+        url=re.compile(r"https://www\.dice\.com/job-detail/.*"),
+        text=DETAIL_HTML,
     )
     scraper = DiceScraper()
     jobs = await scraper.scrape()
@@ -95,6 +114,10 @@ async def test_dice_deduplicates(httpx_mock):
     httpx_mock.add_response(
         url=re.compile(r"https://www\.dice\.com/jobs\?.*"),
         text=html,
+    )
+    httpx_mock.add_response(
+        url=re.compile(r"https://www\.dice\.com/job-detail/.*"),
+        text=DETAIL_HTML,
     )
     scraper = DiceScraper()
     jobs = await scraper.scrape()
@@ -143,6 +166,10 @@ async def test_dice_custom_search_terms(httpx_mock):
     httpx_mock.add_response(
         url=re.compile(r"https://www\.dice\.com/jobs\?.*"),
         text=html,
+    )
+    httpx_mock.add_response(
+        url=re.compile(r"https://www\.dice\.com/job-detail/.*"),
+        text=DETAIL_HTML,
     )
     scraper = DiceScraper(search_terms=["kubernetes engineer", "terraform"])
     jobs = await scraper.scrape()
