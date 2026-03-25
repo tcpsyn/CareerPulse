@@ -42,6 +42,10 @@ Your data stays on your machine. No SaaS subscription, no resume uploaded to a t
 - **Job comparison view** — Side-by-side comparison of 2-3 jobs (score, salary, location, match reasons)
 - **DOCX export** — Download tailored resumes and cover letters as Word documents alongside PDF
 - **Multiple resume versions** — Manage and store multiple resumes, select which to use per application
+- **Interview round tracking** — Log interview rounds per application (type, interviewer, date, outcome); promote interviewers to contacts in the CRM
+- **Calendar view** — Monthly grid + agenda view of all interview rounds and application events; subscribe via iCal to sync to Google Calendar, Outlook, or Apple Calendar
+- **Interview detail panel** — Slide-out panel per application showing round history, outcome logging, and embedded salary calculator
+- **External job entry** — Manually add jobs from any source not covered by scrapers via the extension overlay or API
 - **Application response tracking** — Log interview invites, rejections, and ghosted outcomes; analytics dashboard
 - **Job board overlay extension** — Save buttons and match score badges injected directly on LinkedIn, Indeed, Dice, and Glassdoor pages
 - **Auto-track applications** — Extension detects form submissions and automatically marks jobs as applied
@@ -160,9 +164,10 @@ The extension requires profile data in CareerPulse. Fill out your profile in **S
 FastAPI (async)
 ├── app/main.py — create_app factory + lifespan (378 lines)
 │   └── Dual DB connections: app.state.db (requests) + app.state.bg_db (background tasks)
-├── app/routers/ — 10 APIRouter modules
+├── app/routers/ — 12 APIRouter modules
 │   ├── jobs.py, tailoring.py, pipeline.py, queue.py, contacts.py
-│   └── analytics.py, settings.py, alerts.py, scraping.py, autofill.py
+│   ├── analytics.py, settings.py, alerts.py, scraping.py, autofill.py
+│   └── interviews.py (rounds CRUD + promote-to-contact), calendar.py (events + iCal feed)
 │       scraping.py: supports force=True to bypass scraper schedule check
 ├── app/scrapers/ — 14 active sources with retry/backoff, UA rotation, rate limiting
 ├── app/database.py — SQLite via aiosqlite (37 tables, FK enforcement, WAL mode)
@@ -183,7 +188,8 @@ FastAPI (async)
 │   ├── app/static/js/utils.js — HTML sanitization, shared helpers
 │   ├── app/static/js/onboarding.js — 4-step first-run wizard
 │   ├── app/static/js/salary-calculator.js — W2/1099/C2C calculator
-│   └── app/static/js/views/ — feed, detail, pipeline, queue, stats, settings, network, triage
+│   ├── app/static/js/interview-panel.js — interview detail slide-out + salary calculator
+│   └── app/static/js/views/ — feed, detail, pipeline, queue, stats, settings, network, triage, calendar
 └── Chrome Extension (autofill + overlay + queue fill)
 ```
 
@@ -354,6 +360,17 @@ The full REST API is auto-documented at:
 - `POST /api/jobs/:id/contacts` — Link contact to job
 - `DELETE /api/jobs/:id/contacts` — Unlink contact from job
 
+### Interviews
+- `GET /api/jobs/:id/interviews` — List interview rounds for an application
+- `POST /api/jobs/:id/interviews` — Add interview round (type, interviewer, date, notes, outcome)
+- `PUT /api/interviews/:id` — Update interview round
+- `DELETE /api/interviews/:id` — Delete interview round
+- `POST /api/interviews/:id/promote-contact` — Create a CRM contact from the interviewer
+
+### Calendar
+- `GET /api/calendar/events` — List calendar events (interviews + deadlines) with date range filter
+- `GET /api/calendar/ical` — iCal feed for subscribing in external calendars (Google, Outlook, Apple)
+
 ### Career Advisor
 - `POST /api/career/analyze` — Trigger career trajectory analysis
 - `GET /api/career/suggestions` — List AI-generated role suggestions
@@ -385,19 +402,19 @@ The full REST API is auto-documented at:
 ## Testing
 
 ```bash
-# Backend (512 tests)
+# Backend (655 tests)
 uv run pytest
 
-# Frontend (92 tests)
+# Frontend (140 tests)
 cd app/static && npx vitest run
 
 # Extension (453 tests)
 cd extension && npx vitest run
 ```
 
-**Total: 1,057 tests** across backend, frontend, and extension.
+**Total: 1,248 tests** across backend, frontend, and extension.
 
-Backend covers: scrapers, database, API endpoints, matcher, tailor, resume analyzer, AI client, contact finder, apply link finder, salary estimator, company research, digest, profile CRUD, autofill, custom Q&A, saved views, response tracking, alerts, application queue, follow-up templates, contacts CRM, career advisor, offers, and predictions.
+Backend covers: scrapers, database, API endpoints, matcher, tailor, resume analyzer, AI client, contact finder, apply link finder, salary estimator, company research, digest, profile CRUD, autofill, custom Q&A, saved views, response tracking, alerts, application queue, follow-up templates, contacts CRM, career advisor, offers, predictions, interview rounds, and calendar events.
 
 ## CI
 
