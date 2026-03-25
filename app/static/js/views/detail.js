@@ -84,6 +84,7 @@ function renderJobDetailContent(container, job, profile = {}, companyInfo = null
                     <div class="detail-description-content">${descriptionContent}</div>
                 </div>
                 ${application ? `<div id="interview-timeline-container"></div>` : ''}
+                ${['interviewing', 'applied', 'offered'].includes(application?.status) ? `<div id="comp-snapshot-container"></div>` : ''}
             </div>
             <div class="detail-sidebar">
                 ${score ? `
@@ -572,6 +573,11 @@ function renderJobDetailContent(container, job, profile = {}, companyInfo = null
         loadInterviewTimeline(job.id, container, profile, companyInfo, resumes);
     }
 
+    // Render compensation snapshot for pipeline jobs
+    if (document.getElementById('comp-snapshot-container')) {
+        renderCompSnapshot(job);
+    }
+
     const dismissDupesBtn = document.getElementById('dismiss-dupes-btn');
     if (dismissDupesBtn) {
         dismissDupesBtn.addEventListener('click', async () => {
@@ -859,6 +865,208 @@ function wireCrmQuickActions(job, container, profile, companyInfo, resumes) {
     });
 
     wireNoteForm();
+}
+
+function buildCompStateOptions(selected) {
+    if (typeof TAX_DATA !== 'undefined' && TAX_DATA.states) {
+        return Object.entries(TAX_DATA.states)
+            .sort((a, b) => a[1].name.localeCompare(b[1].name))
+            .map(([code, s]) => `<option value="${code}"${code === selected ? ' selected' : ''}>${s.name}${s.type === 'none' ? ' (no tax)' : ''}</option>`)
+            .join('');
+    }
+    return `<option value="${selected}">${selected}</option>`;
+}
+
+function renderCompSnapshot(job) {
+    const container = document.getElementById('comp-snapshot-container');
+    if (!container) return;
+
+    const gross = job.salary_max || job.salary_min ||
+                  job.salary_estimate_max || job.salary_estimate_min || 0;
+
+    if (!gross || gross <= 0) {
+        container.innerHTML = '';
+        return;
+    }
+
+    const isContract = job.employment_type === 'contract';
+    const isHourly = isContract && gross > 0 && gross < 500;
+    const annualGross = isHourly ? gross * 40 * 52 : gross;
+
+    const stateMatch = (job.location || '').match(/,\s*([A-Z]{2})\b/);
+    const defaultState = (typeof loadCalcSettings === 'function' ? loadCalcSettings().state : null) || 'TX';
+    const state = stateMatch ? stateMatch[1] : defaultState;
+    const empType = isContract ? '1099' : 'w2';
+    const filingStatus = (typeof loadCalcSettings === 'function' ? loadCalcSettings().filing : null) || 'single';
+
+    const result = typeof calculateSalary === 'function' ? calculateSalary({
+        gross: annualGross, state, filingStatus, employmentType: empType,
+        deductions: {}, c2cMargin: 0
+    }) : null;
+
+    if (!result) {
+        container.innerHTML = '';
+        return;
+    }
+
+    let comparisonHtml = '';
+    if (isContract && typeof compareEmploymentTypes === 'function') {
+        const comparison = compareEmploymentTypes(annualGross, state, filingStatus, {}, 0);
+        const monthly = (type) => formatCurrency(Math.round((comparison[type]?.takeHome || 0) / 12));
+        comparisonHtml = `
+            <div class="comp-comparison">
+                <span>W2: ${monthly('w2')}/mo</span>
+                <span class="comp-divider">|</span>
+                <span>1099: ${monthly('1099')}/mo</span>
+                <span class="comp-divider">|</span>
+                <span>C2C: ${monthly('c2c')}/mo</span>
+            </div>`;
+    }
+
+    container.innerHTML = `
+        <div class="card comp-snapshot-card">
+            <div class="comp-snapshot-header">
+                <h3>Compensation Snapshot</h3>
+                <span class="comp-edit-hint">Adjust to compare</span>
+            </div>
+            <div class="comp-controls">
+                <div class="comp-control-group">
+                    <label>${isHourly ? 'Hourly Rate ($)' : 'Annual Salary ($)'}</label>
+                    <input type="number" class="search-input" id="comp-gross" value="${isHourly ? gross : annualGross}" min="0" step="${isHourly ? '1' : '1000'}">
+                </div>
+                <div class="comp-control-group">
+                    <label>Type</label>
+                    <div class="comp-toggle-row">
+                        <button class="comp-toggle${empType === 'w2' ? ' active' : ''}" data-group="compEmp" data-value="w2">W-2</button>
+                        <button class="comp-toggle${empType === '1099' ? ' active' : ''}" data-group="compEmp" data-value="1099">1099</button>
+                        <button class="comp-toggle${empType === 'c2c' ? ' active' : ''}" data-group="compEmp" data-value="c2c">C2C</button>
+                    </div>
+                </div>
+                <div class="comp-control-group">
+                    <label>Filing</label>
+                    <div class="comp-toggle-row">
+                        <button class="comp-toggle${filingStatus === 'single' ? ' active' : ''}" data-group="compFiling" data-value="single">Single</button>
+                        <button class="comp-toggle${filingStatus === 'married' ? ' active' : ''}" data-group="compFiling" data-value="married">Married</button>
+                    </div>
+                </div>
+                <div class="comp-control-group">
+                    <label>State</label>
+                    <select class="filter-select" id="comp-state">${buildCompStateOptions(state)}</select>
+                </div>
+            </div>
+            <div class="comp-stats" id="comp-stats">
+                <div class="comp-stat">
+                    <div class="comp-stat-value" id="comp-gross-val">${formatCurrency(result.gross)}</div>
+                    <div class="comp-stat-label">Gross</div>
+                </div>
+                <div class="comp-stat">
+                    <div class="comp-stat-value" id="comp-tax-val">${formatCurrency(result.totalTax)}</div>
+                    <div class="comp-stat-label">Taxes</div>
+                </div>
+                <div class="comp-stat">
+                    <div class="comp-stat-value comp-takehome" id="comp-takehome-val">${formatCurrency(result.takeHome)}</div>
+                    <div class="comp-stat-label">Take-Home</div>
+                </div>
+                <div class="comp-stat">
+                    <div class="comp-stat-value" id="comp-rate-val">${(result.effectiveRate * 100).toFixed(1)}%</div>
+                    <div class="comp-stat-label">Eff. Rate</div>
+                </div>
+            </div>
+            ${comparisonHtml}
+            <div class="comp-chart-wrap">
+                <canvas id="comp-donut"></canvas>
+            </div>
+        </div>
+    `;
+
+    // Render donut
+    renderCompDonut(result);
+
+    // Wire recalc
+    wireCompSnapshotEvents(container, { isHourly, state, empType, filingStatus });
+}
+
+let compSnapshotChart = null;
+
+function renderCompDonut(result) {
+    if (compSnapshotChart) compSnapshotChart.destroy();
+    const canvas = document.getElementById('comp-donut');
+    if (!canvas || !result || typeof Chart === 'undefined') return;
+
+    const colors = typeof getChartColors === 'function' ? getChartColors() : {
+        federal: '#6366f1', state: '#f59e0b', ss: '#10b981', medicare: '#ec4899',
+        seTax: '#8b5cf6', takeHome: '#22c55e', surface: '#fff', text: '#64748b'
+    };
+    const segments = [
+        { label: 'Federal', value: result.federal, color: colors.federal },
+        { label: 'State', value: result.state, color: colors.state },
+        { label: 'SS', value: result.ss, color: colors.ss },
+        { label: 'Medicare', value: result.medicare, color: colors.medicare }
+    ];
+    if (result.seTax > 0) segments.push({ label: 'SE Tax', value: result.seTax, color: colors.seTax });
+    segments.push({ label: 'Take-Home', value: Math.max(0, result.takeHome), color: colors.takeHome });
+    const filtered = segments.filter(s => s.value > 0);
+
+    compSnapshotChart = new Chart(canvas, {
+        type: 'doughnut',
+        data: {
+            labels: filtered.map(s => s.label),
+            datasets: [{ data: filtered.map(s => s.value), backgroundColor: filtered.map(s => s.color), borderWidth: 2, borderColor: colors.surface }]
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false, cutout: '60%',
+            animation: { animateRotate: true, duration: 600, easing: 'easeOutQuart' },
+            plugins: {
+                legend: { position: 'bottom', labels: { color: colors.text, padding: 8, usePointStyle: true, pointStyleWidth: 8, font: { size: 11 } } },
+                tooltip: { callbacks: { label: ctx => `${ctx.label}: ${formatCurrency(ctx.raw)} (${((ctx.raw / result.gross) * 100).toFixed(1)}%)` } }
+            }
+        }
+    });
+}
+
+function wireCompSnapshotEvents(container, defaults) {
+    let debounceId = null;
+    const recalc = () => {
+        clearTimeout(debounceId);
+        debounceId = setTimeout(() => {
+            const grossInput = container.querySelector('#comp-gross');
+            let gross = parseFloat(grossInput?.value) || 0;
+            if (defaults.isHourly) gross = gross * 40 * 52;
+
+            const empBtn = container.querySelector('.comp-toggle[data-group="compEmp"].active');
+            const filingBtn = container.querySelector('.comp-toggle[data-group="compFiling"].active');
+            const stateSelect = container.querySelector('#comp-state');
+
+            const employmentType = empBtn?.dataset.value || defaults.empType;
+            const filingStatus = filingBtn?.dataset.value || defaults.filingStatus;
+            const state = stateSelect?.value || defaults.state;
+
+            const result = calculateSalary({ gross, state, filingStatus, employmentType, deductions: {}, c2cMargin: 0 });
+            if (!result) return;
+
+            const el = (id) => container.querySelector(id);
+            if (el('#comp-gross-val')) el('#comp-gross-val').textContent = formatCurrency(result.gross);
+            if (el('#comp-tax-val')) el('#comp-tax-val').textContent = formatCurrency(result.totalTax);
+            if (el('#comp-takehome-val')) el('#comp-takehome-val').textContent = formatCurrency(result.takeHome);
+            if (el('#comp-rate-val')) el('#comp-rate-val').textContent = (result.effectiveRate * 100).toFixed(1) + '%';
+
+            renderCompDonut(result);
+        }, 150);
+    };
+
+    container.querySelectorAll('.comp-toggle').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const group = btn.dataset.group;
+            container.querySelectorAll(`.comp-toggle[data-group="${group}"]`).forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+            recalc();
+        });
+    });
+
+    container.querySelectorAll('input, select').forEach(el => {
+        el.addEventListener('input', recalc);
+        el.addEventListener('change', recalc);
+    });
 }
 
 function renderPreparedSection(data, jobId) {

@@ -2775,15 +2775,161 @@ kbd {
     border-top: 1px solid var(--border);
 }
 
+/* === Compensation Snapshot === */
+
+.comp-snapshot-card {
+    padding: 20px;
+}
+
+.comp-snapshot-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 16px;
+}
+
+.comp-snapshot-header h3 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 700;
+}
+
+.comp-edit-hint {
+    font-size: 0.75rem;
+    color: var(--text-tertiary);
+}
+
+.comp-controls {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.comp-control-group {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 90px;
+    flex: 1;
+}
+
+.comp-control-group label {
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.comp-toggle-row {
+    display: flex;
+    gap: 0;
+}
+
+.comp-toggle {
+    padding: 5px 10px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    border: 1px solid var(--border);
+    background: var(--bg-surface);
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 150ms ease;
+}
+
+.comp-toggle:first-child {
+    border-radius: var(--radius-sm) 0 0 var(--radius-sm);
+}
+
+.comp-toggle:last-child {
+    border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+}
+
+.comp-toggle:not(:first-child) {
+    border-left: none;
+}
+
+.comp-toggle.active {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+}
+
+.comp-toggle.active + .comp-toggle {
+    border-left-color: var(--accent);
+}
+
+.comp-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+    margin-bottom: 12px;
+}
+
+.comp-stat {
+    text-align: center;
+    padding: 10px 6px;
+    background: var(--bg-surface-secondary);
+    border-radius: var(--radius-sm);
+}
+
+.comp-stat-value {
+    font-size: 0.9375rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.comp-stat-value.comp-takehome {
+    color: var(--score-green);
+}
+
+.comp-stat-label {
+    font-size: 0.6875rem;
+    color: var(--text-tertiary);
+    margin-top: 2px;
+}
+
+.comp-comparison {
+    display: flex;
+    justify-content: center;
+    gap: 8px;
+    font-size: 0.8125rem;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+}
+
+.comp-divider {
+    color: var(--border);
+}
+
+.comp-chart-wrap {
+    height: 180px;
+    display: flex;
+    justify-content: center;
+}
+
+@media (max-width: 480px) {
+    .comp-stats {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .comp-controls {
+        flex-direction: column;
+    }
+}
+
 /* === Interview Detail Drawer === */
 
 .interview-drawer-backdrop {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.4);
+    background: rgba(0, 0, 0, 0.5);
     z-index: 250;
     opacity: 0;
     transition: opacity 250ms ease;
+    -webkit-backdrop-filter: blur(2px);
+    backdrop-filter: blur(2px);
 }
 
 .interview-drawer-backdrop.active {
@@ -2795,15 +2941,16 @@ kbd {
     top: 0;
     right: 0;
     bottom: 0;
-    width: min(920px, 90vw);
+    width: min(560px, 90vw);
     background: var(--bg-main);
-    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.15);
+    box-shadow: -8px 0 32px rgba(0, 0, 0, 0.25);
     z-index: 251;
     transform: translateX(100%);
     transition: transform 250ms cubic-bezier(0.4, 0, 0.2, 1);
     display: flex;
     flex-direction: column;
     overflow: hidden;
+    isolation: isolate;
 }
 
 .interview-drawer.open {
@@ -2848,6 +2995,18 @@ kbd {
     gap: 0;
     flex: 1;
     overflow: hidden;
+}
+
+.interview-drawer-body.interview-drawer-body-single {
+    display: flex;
+    flex-direction: column;
+    grid-template-columns: none;
+}
+
+.interview-drawer-content {
+    padding: 24px;
+    overflow-y: auto;
+    flex: 1;
 }
 
 .interview-drawer-left {
@@ -2933,69 +3092,6 @@ kbd {
     word-break: break-word;
 }
 
-.compact-stat-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-    margin-bottom: 16px;
-}
-
-.compact-stat-card {
-    background: var(--bg-surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius-sm);
-    padding: 12px;
-    text-align: center;
-}
-
-.compact-stat-card .stat-number {
-    font-size: 1.25rem;
-    font-weight: 700;
-    letter-spacing: -0.03em;
-    color: var(--text-primary);
-    line-height: 1;
-    margin-bottom: 4px;
-}
-
-.compact-stat-card .stat-label {
-    font-size: 0.6875rem;
-    font-weight: 500;
-    color: var(--text-tertiary);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-
-.compact-chart-wrap {
-    height: 160px;
-    margin-top: 16px;
-}
-
-.calc-readonly .calc-toggle-btn {
-    pointer-events: none;
-}
-
-.calc-readonly .calc-input-group input,
-.calc-readonly .calc-input-group select {
-    background: var(--bg-surface-secondary);
-    border-color: transparent;
-    pointer-events: none;
-    color: var(--text-primary);
-}
-
-.iv-comparison-row {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    font-size: 0.75rem;
-    color: var(--text-secondary);
-    margin-bottom: 12px;
-}
-
-.iv-comparison-divider {
-    color: var(--border);
-}
-
 @media (prefers-reduced-motion: reduce) {
     .interview-drawer,
     .interview-drawer-backdrop {
@@ -3020,6 +3116,10 @@ kbd {
     }
 
     .interview-drawer-right {
+        overflow: visible;
+    }
+
+    .interview-drawer-content {
         overflow: visible;
     }
 }
