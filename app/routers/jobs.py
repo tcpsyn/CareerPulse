@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 
@@ -86,6 +87,23 @@ async def save_external_job(request: Request):
         initial_status = body.get("initial_status")
         if initial_status:
             await db.upsert_application(job_id, status=initial_status)
+        # Score the job in the background if AI is configured
+        matcher = getattr(request.app.state, "matcher", None)
+        if matcher and description:
+            async def _score_added_job():
+                try:
+                    result = await matcher.score_job(description)
+                    if result:
+                        await db.insert_score(
+                            job_id, result.get("score", 0),
+                            result.get("reasons", []),
+                            result.get("concerns", []),
+                            result.get("keywords", []),
+                        )
+                        logger.info(f"Scored added job {job_id}: {result.get('score', 0)}")
+                except Exception:
+                    logger.exception(f"Failed to score added job {job_id}")
+            asyncio.create_task(_score_added_job())
     return {"ok": True, "job_id": job_id}
 
 
