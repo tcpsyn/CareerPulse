@@ -1806,7 +1806,9 @@ a:hover {
     background: var(--accent); border: 2px solid var(--bg-surface);
 }
 .timeline-icon { font-size: 1rem; flex-shrink: 0; }
-.timeline-detail { font-size: 0.875rem; color: var(--text-secondary); }
+.timeline-detail { font-size: 0.875rem; color: var(--text-secondary); word-break: break-word; overflow-wrap: break-word; }
+.timeline-detail a { color: var(--accent); text-decoration: none; }
+.timeline-detail a:hover { text-decoration: underline; }
 .timeline-time { font-size: 0.75rem; color: var(--text-tertiary); margin-top: 2px; }
 
 /* === PDF Download Cards === */

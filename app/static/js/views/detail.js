@@ -640,6 +640,22 @@ function renderInterviewPrep(prep) {
     `;
 }
 
+function linkifyDetail(escaped) {
+    // Convert markdown-style [text](url) links (already HTML-escaped)
+    let result = escaped.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_, text, url) => {
+        const safeUrl = sanitizeUrl(url);
+        return `<a href="${safeUrl}" target="_blank" rel="noopener" title="${text}">${text}</a>`;
+    });
+    // Convert bare URLs
+    result = result.replace(/(https?:\/\/[^\s<]+)/g, (url) => {
+        if (url.includes('href=')) return url;
+        const safeUrl = sanitizeUrl(url);
+        const display = url.length > 60 ? url.slice(0, 57) + '...' : url;
+        return `<a href="${safeUrl}" target="_blank" rel="noopener" title="${url}">${display}</a>`;
+    });
+    return result;
+}
+
 function renderTimeline(events) {
     if (!events || events.length === 0) {
         return '<div class="empty-state empty-state-compact"><div class="empty-state-title">No events yet</div><div class="empty-state-desc">Add a note or take an action to start the timeline.</div></div>';
@@ -678,12 +694,12 @@ function renderTimeline(events) {
                 detail = `<div class="timeline-detail">${escapeHtml(e.detail)}</div>`;
             }
         } else {
-            detail = `<div class="timeline-detail">${escapeHtml(e.detail)}</div>`;
+            detail = `<div class="timeline-detail">${linkifyDetail(escapeHtml(e.detail))}</div>`;
         }
         return `
             <div class="timeline-event">
                 <span class="timeline-icon">${icon}</span>
-                <div>
+                <div style="min-width:0">
                     ${detail}
                     <div class="timeline-time">${formatDate(e.created_at)}</div>
                 </div>
