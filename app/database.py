@@ -281,6 +281,7 @@ class Database:
                 api_key TEXT NOT NULL DEFAULT '',
                 model TEXT NOT NULL DEFAULT '',
                 base_url TEXT NOT NULL DEFAULT '',
+                region TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL
             );
             CREATE TABLE IF NOT EXISTS app_events (
@@ -690,6 +691,12 @@ class Database:
         for col, sql in app_migrations.items():
             if col not in app_columns:
                 await self.db.execute(sql)
+
+        # ai_settings migrations
+        ai_cursor = await self.db.execute("PRAGMA table_info(ai_settings)")
+        ai_columns = {row[1] for row in await ai_cursor.fetchall()}
+        if ai_columns and "region" not in ai_columns:
+            await self.db.execute("ALTER TABLE ai_settings ADD COLUMN region TEXT NOT NULL DEFAULT ''")
 
         # One-time migration: move notes from applications to app_events
         cursor = await self.db.execute(
@@ -1404,18 +1411,20 @@ class Database:
         return dict(row)
 
     async def save_ai_settings(self, provider: str, api_key: str = "",
-                                model: str = "", base_url: str = ""):
+                                model: str = "", base_url: str = "",
+                                region: str = ""):
         now = datetime.now(timezone.utc).isoformat()
         await self.db.execute(
-            """INSERT INTO ai_settings (id, provider, api_key, model, base_url, updated_at)
-               VALUES (1, ?, ?, ?, ?, ?)
+            """INSERT INTO ai_settings (id, provider, api_key, model, base_url, region, updated_at)
+               VALUES (1, ?, ?, ?, ?, ?, ?)
                ON CONFLICT(id) DO UPDATE SET
                provider = excluded.provider,
                api_key = excluded.api_key,
                model = excluded.model,
                base_url = excluded.base_url,
+               region = excluded.region,
                updated_at = excluded.updated_at""",
-            (provider, api_key, model, base_url, now)
+            (provider, api_key, model, base_url, region, now)
         )
         await self.db.commit()
 
