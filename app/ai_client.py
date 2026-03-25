@@ -103,7 +103,7 @@ OPENAI_COMPAT_PROVIDERS = {
     },
 }
 
-ALL_PROVIDERS = ["anthropic", "ollama", "openai", "google", "openrouter"]
+ALL_PROVIDERS = ["anthropic", "bedrock", "ollama", "openai", "google", "openrouter"]
 
 
 async def check_ai_reachable(client: "AIClient") -> tuple[bool, str]:
@@ -118,6 +118,13 @@ async def check_ai_reachable(client: "AIClient") -> tuple[bool, str]:
         elif client.provider == "anthropic":
             import anthropic
             c = anthropic.AsyncAnthropic(api_key=client.api_key)
+            await c.messages.create(
+                model=client.model, max_tokens=1,
+                messages=[{"role": "user", "content": "hi"}],
+            )
+            return True, "ok"
+        elif client.provider == "bedrock":
+            c = client._bedrock_client()
             await c.messages.create(
                 model=client.model, max_tokens=1,
                 messages=[{"role": "user", "content": "hi"}],
@@ -142,15 +149,18 @@ class AIClient:
     """Unified async AI client supporting Anthropic, Ollama, OpenAI, Google, and OpenRouter."""
 
     def __init__(self, provider: str, api_key: str = "", model: str = "",
-                 base_url: str = ""):
+                 base_url: str = "", region: str = ""):
         self.provider = provider
         self.api_key = api_key
+        self.region = region
         self.model = model or self._default_model()
         self.base_url = base_url or self._default_base_url()
 
     def _default_model(self):
         if self.provider == "anthropic":
             return "claude-sonnet-4-20250514"
+        if self.provider == "bedrock":
+            return "us.anthropic.claude-sonnet-4-6"
         if self.provider == "ollama":
             return "llama3"
         if self.provider in OPENAI_COMPAT_PROVIDERS:
@@ -190,6 +200,8 @@ class AIClient:
     async def _chat_with_retry(self, prompt: str, max_tokens: int) -> str:
         if self.provider == "anthropic":
             return await self._anthropic_chat(prompt, max_tokens)
+        elif self.provider == "bedrock":
+            return await self._bedrock_chat(prompt, max_tokens)
         elif self.provider == "ollama":
             return await self._ollama_chat(prompt, max_tokens)
         elif self.provider in OPENAI_COMPAT_PROVIDERS:
@@ -200,6 +212,24 @@ class AIClient:
     async def _anthropic_chat(self, prompt: str, max_tokens: int) -> str:
         import anthropic
         client = anthropic.AsyncAnthropic(api_key=self.api_key)
+        message = await client.messages.create(
+            model=self.model,
+            max_tokens=max_tokens,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        return message.content[0].text
+
+    def _bedrock_client(self):
+        import anthropic
+        kwargs = {"aws_region": self.region or "us-east-1"}
+        if self.api_key:
+            kwargs["aws_access_key"] = self.api_key
+        if self.base_url:
+            kwargs["aws_secret_key"] = self.base_url
+        return anthropic.AsyncAnthropicBedrock(**kwargs)
+
+    async def _bedrock_chat(self, prompt: str, max_tokens: int) -> str:
+        client = self._bedrock_client()
         message = await client.messages.create(
             model=self.model,
             max_tokens=max_tokens,
