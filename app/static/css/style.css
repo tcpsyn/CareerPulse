@@ -340,6 +340,36 @@ a:hover {
     border-radius: var(--radius-xs);
 }
 
+.tab-bar {
+    display: inline-flex;
+    background: var(--bg-inset, var(--border));
+    border-radius: var(--radius);
+    padding: 3px;
+    gap: 2px;
+}
+
+.tab-btn {
+    padding: 6px 16px;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    border: none;
+    border-radius: calc(var(--radius) - 2px);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.tab-btn:hover {
+    color: var(--text-primary);
+}
+
+.tab-btn.active {
+    background: var(--bg-surface);
+    color: var(--text-primary);
+    box-shadow: var(--shadow);
+}
+
 .btn-icon {
     padding: 10px;
     width: 44px;
@@ -798,6 +828,13 @@ a:hover {
     grid-template-columns: 1fr 360px;
     gap: 24px;
     align-items: start;
+}
+
+.detail-main-col {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-width: 0;
 }
 
 .detail-description {
@@ -2235,4 +2272,517 @@ kbd {
     background: var(--score-amber-bg);
     color: var(--score-amber);
     line-height: 1.3;
+}
+
+/* === Calendar View === */
+.calendar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+    gap: 12px;
+}
+
+.calendar-layout {
+    display: grid;
+    grid-template-columns: 1fr 280px;
+    gap: 24px;
+    align-items: start;
+}
+
+.calendar-weekdays {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 1px;
+    margin-bottom: 1px;
+}
+
+.calendar-weekday {
+    padding: 8px 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-tertiary);
+    text-align: center;
+}
+
+.calendar-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 1px;
+    background: var(--border);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+}
+
+.calendar-day {
+    background: var(--bg-surface);
+    min-height: 100px;
+    padding: 6px;
+    cursor: default;
+    transition: background var(--transition);
+}
+
+.calendar-day-has-events {
+    cursor: pointer;
+}
+
+.calendar-day-has-events:hover {
+    background: var(--bg-surface-hover);
+}
+
+.calendar-day-other {
+    background: var(--bg-surface-secondary);
+}
+
+.calendar-day-other .calendar-day-number {
+    color: var(--text-tertiary);
+}
+
+.calendar-day-today .calendar-day-number {
+    background: var(--accent);
+    color: #fff;
+    border-radius: var(--radius-full);
+    width: 26px;
+    height: 26px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.calendar-day-number {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    margin-bottom: 4px;
+    color: var(--text-primary);
+}
+
+.calendar-day-events {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.calendar-chip {
+    font-size: 0.6875rem;
+    padding: 2px 6px;
+    border-radius: var(--radius-xs);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.4;
+}
+
+.calendar-chip-interview {
+    background: var(--accent-light);
+    color: var(--accent);
+}
+
+.calendar-chip-reminder {
+    background: var(--score-amber-bg);
+    color: var(--score-amber);
+}
+
+.calendar-chip-more {
+    font-size: 0.6875rem;
+    color: var(--text-tertiary);
+    padding: 1px 6px;
+}
+
+/* Calendar Sidebar */
+.calendar-sidebar {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 16px;
+    position: sticky;
+    top: 80px;
+}
+
+.calendar-agenda-empty {
+    font-size: 0.8125rem;
+    color: var(--text-tertiary);
+    padding: 12px 0;
+}
+
+.calendar-agenda-item {
+    display: flex;
+    gap: 10px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.calendar-agenda-item:last-child {
+    border-bottom: none;
+}
+
+.calendar-agenda-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: var(--radius-full);
+    margin-top: 5px;
+    flex-shrink: 0;
+}
+
+.calendar-agenda-dot.calendar-chip-interview {
+    background: var(--accent);
+}
+
+.calendar-agenda-dot.calendar-chip-reminder {
+    background: var(--score-amber);
+}
+
+.calendar-agenda-content {
+    min-width: 0;
+}
+
+.calendar-agenda-label {
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.calendar-agenda-time {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-top: 2px;
+}
+
+.calendar-agenda-link {
+    font-size: 0.75rem;
+    margin-top: 2px;
+    display: inline-block;
+}
+
+/* Calendar responsive */
+@media (max-width: 768px) {
+    .calendar-layout {
+        grid-template-columns: 1fr;
+    }
+
+    .calendar-sidebar {
+        position: static;
+    }
+
+    .calendar-day {
+        min-height: 60px;
+        padding: 4px;
+    }
+
+    .calendar-chip {
+        font-size: 0.625rem;
+        padding: 1px 4px;
+    }
+
+    .calendar-header {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}
+
+/* === Interview Timeline === */
+.interview-timeline-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    position: relative;
+}
+
+.interview-round-card {
+    display: flex;
+    gap: 16px;
+    position: relative;
+    padding-left: 24px;
+    padding-bottom: 16px;
+}
+
+.interview-round-card:last-child {
+    padding-bottom: 0;
+}
+
+.interview-round-card:last-child .interview-round-line {
+    display: none;
+}
+
+.interview-round-line {
+    position: absolute;
+    left: 7px;
+    top: 12px;
+    bottom: 0;
+    width: 2px;
+    background: var(--border);
+}
+
+.interview-round-dot {
+    position: absolute;
+    left: 2px;
+    top: 6px;
+    width: 12px;
+    height: 12px;
+    border-radius: var(--radius-full);
+    background: var(--accent);
+    border: 2px solid var(--bg-surface);
+    box-shadow: 0 0 0 2px var(--accent);
+    flex-shrink: 0;
+}
+
+.interview-round-content {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 12px;
+    background: var(--bg-surface-secondary);
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+}
+
+/* === Interview Detail Drawer === */
+
+.interview-drawer-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.4);
+    z-index: 250;
+    opacity: 0;
+    transition: opacity 250ms ease;
+}
+
+.interview-drawer-backdrop.active {
+    opacity: 1;
+}
+
+.interview-drawer {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(920px, 90vw);
+    background: var(--bg-main);
+    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.15);
+    z-index: 251;
+    transform: translateX(100%);
+    transition: transform 250ms cubic-bezier(0.4, 0, 0.2, 1);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.interview-drawer.open {
+    transform: translateX(0);
+}
+
+.interview-drawer-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 24px;
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+}
+
+.interview-drawer-header h2 {
+    font-size: 1.125rem;
+    font-weight: 700;
+    margin: 0;
+}
+
+.interview-drawer-close {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    line-height: 1;
+    color: var(--text-secondary);
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: var(--radius-xs);
+    transition: background var(--transition), color var(--transition);
+}
+
+.interview-drawer-close:hover {
+    background: var(--bg-surface-hover);
+    color: var(--text-primary);
+}
+
+.interview-drawer-body {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    flex: 1;
+    overflow: hidden;
+}
+
+.interview-drawer-left {
+    padding: 24px;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+}
+
+.interview-drawer-right {
+    padding: 24px;
+    overflow-y: auto;
+    background: var(--bg-surface-secondary);
+}
+
+.interview-drawer-right.editing {
+    box-shadow: inset 0 0 0 2px var(--accent-light);
+}
+
+.edit-toggle-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: var(--bg-surface-secondary);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-full);
+    cursor: pointer;
+    transition: all var(--transition);
+}
+
+.edit-toggle-btn:hover {
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.edit-toggle-btn.active {
+    background: var(--accent-light);
+    border-color: var(--accent);
+    color: var(--accent);
+}
+
+.round-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px;
+    background: var(--accent-light);
+    color: var(--accent);
+    font-size: 0.8125rem;
+    font-weight: 600;
+    border-radius: var(--radius-full);
+}
+
+.interview-status-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    border-radius: var(--radius-full);
+    text-transform: capitalize;
+}
+
+.interview-details-grid {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 8px 16px;
+}
+
+.interview-details-grid .detail-label {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    text-align: right;
+    padding-top: 1px;
+}
+
+.interview-details-grid .detail-value {
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    word-break: break-word;
+}
+
+.compact-stat-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 16px;
+}
+
+.compact-stat-card {
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    text-align: center;
+}
+
+.compact-stat-card .stat-number {
+    font-size: 1.25rem;
+    font-weight: 700;
+    letter-spacing: -0.03em;
+    color: var(--text-primary);
+    line-height: 1;
+    margin-bottom: 4px;
+}
+
+.compact-stat-card .stat-label {
+    font-size: 0.6875rem;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.compact-chart-wrap {
+    height: 160px;
+    margin-top: 16px;
+}
+
+.calc-readonly .calc-toggle-btn {
+    pointer-events: none;
+}
+
+.calc-readonly .calc-input-group input,
+.calc-readonly .calc-input-group select {
+    background: var(--bg-surface-secondary);
+    border-color: transparent;
+    pointer-events: none;
+    color: var(--text-primary);
+}
+
+.iv-comparison-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+}
+
+.iv-comparison-divider {
+    color: var(--border);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .interview-drawer,
+    .interview-drawer-backdrop {
+        transition: none;
+    }
+}
+
+@media (max-width: 768px) {
+    .interview-drawer {
+        width: 100vw;
+    }
+
+    .interview-drawer-body {
+        grid-template-columns: 1fr;
+        overflow-y: auto;
+    }
+
+    .interview-drawer-left {
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        overflow: visible;
+    }
+
+    .interview-drawer-right {
+        overflow: visible;
+    }
 }

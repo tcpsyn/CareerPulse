@@ -107,4 +107,50 @@ const api = {
         const qs = new URLSearchParams({ base_url: baseUrl || 'http://localhost:11434' });
         return this.request('GET', `/api/ai-settings/models?${qs}`);
     },
+
+    // === Interview Rounds ===
+
+    getInterviews(jobId) {
+        return this.request('GET', `/api/jobs/${jobId}/interviews`);
+    },
+
+    createInterview(jobId, data) {
+        return this.request('POST', `/api/jobs/${jobId}/interviews`, data);
+    },
+
+    updateInterview(id, data) {
+        return this.request('PUT', `/api/interviews/${id}`, data);
+    },
+
+    deleteInterview(id) {
+        return this.request('DELETE', `/api/interviews/${id}`);
+    },
+
+    promoteInterviewer(interviewId, contactData) {
+        return this.request('POST', `/api/interviews/${interviewId}/promote-interviewer`, contactData);
+    },
+
+    // === Calendar ===
+
+    getCalendarEvents(params = {}) {
+        const qs = new URLSearchParams();
+        Object.entries(params).forEach(([k, v]) => {
+            if (v !== null && v !== undefined && v !== '') qs.set(k, v);
+        });
+        return this.request('GET', `/api/calendar?${qs}`);
+    },
+
+    getIcalToken() {
+        return this.request('GET', '/api/calendar/ical-token');
+    },
+
+    regenerateIcalToken() {
+        return this.request('POST', '/api/calendar/ical-token');
+    },
+
+    // === External Jobs ===
+
+    saveExternalJob(data) {
+        return this.request('POST', '/api/jobs/save-external', data);
+    },
 };

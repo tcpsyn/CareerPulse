@@ -4,6 +4,8 @@ import logging
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import Response
 
+from app.enrichment import enrich_job_description
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api")
@@ -49,9 +51,25 @@ async def save_external_job(request: Request):
     title = body.get("title", "").strip()
     company = body.get("company", "").strip()
     url = body.get("url", "").strip()
-    if not title or not company or not url:
-        raise HTTPException(400, "title, company, and url are required")
+    if not title or not company:
+        raise HTTPException(400, "title and company are required")
+
+    # Generate a placeholder URL if none provided (DB requires unique URL)
+    if not url:
+        import uuid
+        url = f"external://{uuid.uuid4().hex}"
+
     description = body.get("description", "")
+
+    # Auto-fetch description if requested and none provided
+    if body.get("fetch_description") and not description and url and not url.startswith("external://"):
+        try:
+            fetched = await enrich_job_description(url, source="external")
+            if fetched:
+                description = fetched
+        except Exception:
+            pass  # Fail silently
+
     source = body.get("source", "external")
     job_id = await db.insert_job(
         title=title, company=company, location=body.get("location", ""),
@@ -61,8 +79,13 @@ async def save_external_job(request: Request):
         contact_email=body.get("contact_email"),
     )
     if job_id:
-        await db.insert_source(job_id, source, url)
+        if not url.startswith("external://"):
+            await db.insert_source(job_id, source, url)
         await db.add_event(job_id, "saved_external", f"Saved from {source}")
+        # Set initial pipeline status if provided
+        initial_status = body.get("initial_status")
+        if initial_status:
+            await db.upsert_application(job_id, status=initial_status)
     return {"ok": True, "job_id": job_id}
 
 

@@ -172,7 +172,25 @@ def _extract_dice(soup: BeautifulSoup) -> str | None:
 
 
 def _extract_generic(soup: BeautifulSoup) -> str | None:
-    """Fallback: find the largest text block that looks like a job description."""
+    """Extract job description: try JSON-LD first, then largest text block."""
+    import json as _json
+    # Many ATS platforms (Greenhouse, Lever, Workday) embed JSON-LD server-side
+    for script in soup.select('script[type="application/ld+json"]'):
+        try:
+            data = _json.loads(script.string)
+            # Handle both single objects and arrays
+            items = data if isinstance(data, list) else [data]
+            for item in items:
+                if item.get("@type") in ("JobPosting", "jobPosting"):
+                    desc_html = item.get("description", "")
+                    if desc_html:
+                        text = BeautifulSoup(desc_html, "html.parser").get_text(separator="\n", strip=True)
+                        if len(text) > 100:
+                            return text
+        except (_json.JSONDecodeError, TypeError, AttributeError):
+            continue
+
+    # Fallback: find the largest text block
     candidates = soup.select("article, main, [class*='description'], [class*='content'], [class*='detail']")
     best = ""
     for el in candidates:
