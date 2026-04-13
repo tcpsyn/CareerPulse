@@ -662,6 +662,92 @@ describe('fillField — select_dropdown', () => {
 });
 
 // ═══════════════════════════════════════════════════════════════
+// fillField — Workday-style custom state dropdown
+// (button[aria-haspopup="listbox"] trigger + portal-rendered popup
+//  with [data-automation-id="promptOption"] items)
+// ═══════════════════════════════════════════════════════════════
+
+describe('fillField — Workday state dropdown', () => {
+  function createWorkdayStateField(states) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.id = 'stateBtn';
+    button.setAttribute('aria-haspopup', 'listbox');
+    button.setAttribute('data-automation-id', 'stateProvince');
+    button.setAttribute('aria-label', 'State');
+    button.textContent = 'Select One';
+    document.body.appendChild(button);
+
+    const label = document.createElement('label');
+    label.setAttribute('for', 'stateBtn');
+    label.textContent = 'State';
+    document.body.appendChild(label);
+
+    // Popup rendered as a portal sibling of body (no role on container).
+    const popup = document.createElement('div');
+    popup.setAttribute('data-automation-widget', 'wd-popup');
+    popup.style.display = 'none';
+
+    for (const s of states) {
+      const opt = document.createElement('div');
+      opt.setAttribute('role', 'option');
+      opt.setAttribute('data-automation-id', 'promptOption');
+      opt.textContent = s;
+      opt.style.height = '30px';
+      Object.defineProperty(opt, 'offsetHeight', { value: 30, configurable: true });
+      Object.defineProperty(opt, 'offsetWidth', { value: 200, configurable: true });
+      popup.appendChild(opt);
+    }
+    document.body.appendChild(popup);
+
+    const selected = { text: '' };
+    button.addEventListener('click', () => {
+      popup.style.display = 'block';
+      popup.style.position = 'fixed';
+      Object.defineProperty(popup, 'offsetParent', { value: document.body, configurable: true });
+      Object.defineProperty(popup, 'offsetHeight', { value: 200, configurable: true });
+      Object.defineProperty(popup, 'offsetWidth', { value: 250, configurable: true });
+      for (const opt of popup.querySelectorAll('[role="option"]')) {
+        Object.defineProperty(opt, 'offsetParent', { value: popup, configurable: true });
+      }
+    });
+    for (const opt of popup.querySelectorAll('[role="option"]')) {
+      opt.addEventListener('click', () => {
+        selected.text = opt.textContent;
+        button.textContent = opt.textContent;
+      });
+    }
+    return { button, popup, selected };
+  }
+
+  it('clicks the button and selects the matching state option', async () => {
+    const { popup, selected } = createWorkdayStateField([
+      'California', 'New York', 'Texas', 'North Carolina', 'South Carolina',
+    ]);
+
+    const result = await api.fillField('#stateBtn', 'California', 'select_dropdown');
+    expect(result.success).toBe(true);
+    expect(result.selectedText).toBe('California');
+    expect(selected.text).toBe('California');
+    // Confirm the popup was actually opened (not just .value set on the button)
+    expect(popup.style.display).toBe('block');
+  });
+
+  it('normalizes a state abbreviation ("CA") to the full name ("California")', async () => {
+    // This is the core regression: "CA" previously failed because it startsWith-matches
+    // "California", "North Carolina", and "South Carolina" — and the wrong one could win.
+    const { selected } = createWorkdayStateField([
+      'North Carolina', 'South Carolina', 'California',
+    ]);
+
+    const result = await api.fillField('#stateBtn', 'CA', 'select_dropdown');
+    expect(result.success).toBe(true);
+    expect(result.selectedText).toBe('California');
+    expect(selected.text).toBe('California');
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════
 // fillField — radio buttons
 // ═══════════════════════════════════════════════════════════════
 
@@ -1212,6 +1298,46 @@ describe('hasNearbyPhoneCountryCode', () => {
     const phoneInput = createInput({ type: 'tel', name: 'phone', id: 'wdph' });
     container.appendChild(phoneInput);
     document.body.appendChild(container);
+
+    expect(api.hasNearbyPhoneCountryCode(phoneInput)).toBe(true);
+  });
+
+  it('finds Greenhouse phone_country_code select via #app_form ancestor', () => {
+    const form = document.createElement('form');
+    form.id = 'app_form';
+
+    const codeDiv = document.createElement('div');
+    codeDiv.className = 'field';
+    const codeSelect = document.createElement('select');
+    codeSelect.id = 'phone_country_code';
+    codeSelect.name = 'phone_country_code';
+    codeDiv.appendChild(codeSelect);
+    form.appendChild(codeDiv);
+
+    const phoneDiv = document.createElement('div');
+    phoneDiv.className = 'field';
+    const phoneInput = createInput({ type: 'text', name: 'phone', id: 'gh_phone' });
+    phoneDiv.appendChild(phoneInput);
+    form.appendChild(phoneDiv);
+
+    document.body.appendChild(form);
+
+    expect(api.hasNearbyPhoneCountryCode(phoneInput)).toBe(true);
+  });
+
+  it('finds Greenhouse phone_country_code select via #grnhse_app ancestor', () => {
+    const wrapper = document.createElement('div');
+    wrapper.id = 'grnhse_app';
+
+    const codeSelect = document.createElement('select');
+    codeSelect.id = 'phone_country_code';
+    codeSelect.name = 'phone_country_code';
+    wrapper.appendChild(codeSelect);
+
+    const phoneInput = createInput({ type: 'text', name: 'phone', id: 'gh_phone2' });
+    wrapper.appendChild(phoneInput);
+
+    document.body.appendChild(wrapper);
 
     expect(api.hasNearbyPhoneCountryCode(phoneInput)).toBe(true);
   });

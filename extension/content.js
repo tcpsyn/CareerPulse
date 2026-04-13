@@ -548,7 +548,7 @@
   function hasNearbyPhoneCountryCode(el) {
     // Check if there's a phone country code dropdown near this phone field
     try {
-      const container = el.closest('fieldset, [data-automation-id*="phone"], [class*="phone"], section, .form-group, .field-group') || el.parentElement?.parentElement?.parentElement;
+      const container = el.closest('fieldset, [data-automation-id*="phone"], [class*="phone"], section, .form-group, .field-group, #app_form, #application_form, #grnhse_app') || el.parentElement?.parentElement?.parentElement?.parentElement?.parentElement;
       if (!container) return false;
       const candidates = container.querySelectorAll('select, [role="combobox"], [role="listbox"], [aria-haspopup], button[aria-haspopup]');
       for (const c of candidates) {
@@ -841,36 +841,68 @@
   }
 
   async function handleCustomDropdown(el, value, fieldHints) {
-    // Snapshot existing visible listboxes BEFORE clicking, so we can find the new one
-    const preExisting = new Set();
+    // Pre-normalize the target value via the lookup tables (e.g., "CA" → "California").
+    // Workday state dropdowns ship a `searchBox` that filters option text — typing the
+    // canonical full name yields the correct single match; typing "CA" matches
+    // California, North Carolina, and South Carolina.
+    let effectiveValue = value;
+    if (window.__cpNormalize && fieldHints) {
+      try {
+        const norm = window.__cpNormalize;
+        const hintValues = [fieldHints.label, fieldHints.name, fieldHints.id, fieldHints.placeholder].filter(Boolean);
+        const tables = norm.detectFieldCategory(hintValues);
+        for (const t of tables) {
+          const canonical = norm.normalizeValue(value, t);
+          if (canonical) {
+            effectiveValue = canonical.replace(/\b\w/g, c => c.toUpperCase());
+            break;
+          }
+        }
+      } catch { /* skip */ }
+    }
+
+    // Snapshot existing *visible* option elements BEFORE clicking, so any
+    // newly-appeared (or previously-hidden) options can be treated as part of
+    // the freshly-opened dropdown. Tracking options is more reliable than
+    // tracking listbox containers because Workday renders its prompt popup as
+    // a portal that may not have role="listbox" on the outer element.
+    const preExistingOptions = new Set();
     try {
-      for (const lb of document.querySelectorAll('[role="listbox"]')) {
-        const rect = lb.getBoundingClientRect();
-        if (rect.height > 0 && rect.width > 0) preExisting.add(lb);
+      for (const opt of document.querySelectorAll('[role="option"], [data-automation-id="promptOption"]')) {
+        if (isElementVisible(opt)) preExistingOptions.add(opt);
       }
     } catch { /* skip */ }
 
-    // Click to open the dropdown
+    // Click to open the dropdown. Some Workday builds only respond to a full
+    // pointer sequence (mousedown → mouseup → click), so dispatch them too.
+    try {
+      el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+      el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
+    } catch { /* skip */ }
     el.click();
     dispatchEvents(el, ['click', 'focus']);
 
-    // Wait for the new dropdown to appear (retry with increasing delays)
+    // Wait for new options / dropdown to appear (retry with increasing delays)
     let dd = null;
     for (let attempt = 0; attempt < 6; attempt++) {
       await sleep(attempt < 2 ? 200 : 300);
 
-      // Prefer newly-appeared listboxes (not in the pre-existing set)
+      // Look for newly-appeared option elements (Workday uses
+      // [data-automation-id="promptOption"]; others use [role="option"])
       try {
-        for (const lb of document.querySelectorAll('[role="listbox"]')) {
-          const rect = lb.getBoundingClientRect();
-          if (rect.height > 0 && rect.width > 0 && !preExisting.has(lb)) {
-            const opts = lb.querySelectorAll('[role="option"], [data-automation-id="promptOption"]');
-            if (opts.length > 1) { dd = lb; break; }
-          }
+        const newOptions = [];
+        for (const opt of document.querySelectorAll('[role="option"], [data-automation-id="promptOption"]')) {
+          if (preExistingOptions.has(opt)) continue;
+          if (isElementVisible(opt) || opt.offsetHeight > 0) newOptions.push(opt);
+        }
+        if (newOptions.length > 1) {
+          // Find the container: nearest listbox/menu/popup ancestor,
+          // else the shared parent of the options.
+          dd = newOptions[0].closest('[role="listbox"], [role="menu"], [data-automation-widget*="popup"], [data-automation-widget*="prompt"]')
+            || newOptions[0].parentElement;
+          if (dd) break;
         }
       } catch { /* skip */ }
-
-      if (dd) break;
 
       // Fallback: use findTypeaheadDropdown but prefer listboxes with multiple options
       const candidate = findTypeaheadDropdown(el);
@@ -904,13 +936,13 @@
     const searchInput = dd.querySelector('[data-automation-id="searchBox"]') || dd.querySelector('input');
     if (searchInput) {
       searchInput.focus();
-      setNativeValue(searchInput, value);
+      setNativeValue(searchInput, effectiveValue);
       dispatchEvents(searchInput, ['input']);
       await sleep(300);
 
       // Re-fetch filtered options
       const filteredOptions = getDropdownOptions(dd);
-      const match = fuzzyMatchDropdownOption(filteredOptions.length ? filteredOptions : options, value, fieldHints);
+      const match = fuzzyMatchDropdownOption(filteredOptions.length ? filteredOptions : options, effectiveValue, fieldHints);
       if (match) {
         clickOption(match);
         await sleep(200);
@@ -920,7 +952,7 @@
     }
 
     // Direct option match without filtering
-    const match = fuzzyMatchDropdownOption(options, value, fieldHints);
+    const match = fuzzyMatchDropdownOption(options, effectiveValue, fieldHints);
     if (match) {
       clickOption(match);
       await sleep(200);
