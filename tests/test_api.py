@@ -66,7 +66,10 @@ async def test_get_job_not_found(client):
 @pytest.mark.asyncio
 async def test_trigger_scrape(client):
     resp = await client.post("/api/scrape")
-    assert resp.status_code == 200
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["status"] == "started"
+    assert isinstance(body["task_id"], str) and body["task_id"]
 
 
 @pytest.mark.asyncio

@@ -14,7 +14,6 @@ function registerViewCleanup(fn) {
 
 function cleanupCurrentView() {
     while (_viewCleanups.length) _viewCleanups.pop()();
-    stopScrapePoll();
     if (typeof queueEventSource !== 'undefined' && queueEventSource) {
         queueEventSource.close();
         queueEventSource = null;
@@ -208,49 +207,292 @@ async function renderSmartViewChips(reloadFn) {
 
 // === Scrape Handler ===
 let scrapePollInterval = null;
+let currentScrapeTaskId = null;
+let stallToastShownForTaskId = null;
+let lastScrapeState = null;
+
+const SCRAPE_POLL_MS = 1500;
+const STALL_WARN_SEC = 30;
+const STALL_CRITICAL_SEC = 120;
+
 function stopScrapePoll() {
     if (scrapePollInterval) { clearInterval(scrapePollInterval); scrapePollInterval = null; }
 }
-function startScrapePoll() {
-    stopScrapePoll();
-    scrapePollInterval = setInterval(async () => {
-        try {
-            const btn = document.getElementById('scrape-btn') || document.getElementById('stats-scrape-btn');
-            const p = await api.request('GET', '/api/scrape/progress');
-            if (p.active && btn) {
-                btn.disabled = true;
-                const label = p.current ? `${p.current} (${p.completed}/${p.total})` : `${p.completed}/${p.total}`;
-                btn.innerHTML = `<span class="spinner"></span> ${label}`;
-            } else if (!p.active) {
-                stopScrapePoll();
-                if (btn) {
-                    btn.disabled = false;
-                    btn.textContent = 'Scrape Now';
-                }
-                if (p.total > 0) {
-                    showToast(`Scrape done — ${p.new_jobs} new jobs found`, 'success');
-                    handleRoute();
-                }
-            }
-        } catch {}
-    }, 2000);
+
+function getScrapeButtons() {
+    return [
+        document.getElementById('scrape-btn'),
+        document.getElementById('stats-scrape-btn'),
+    ].filter(Boolean);
 }
-async function handleScrape() {
-    const btn = document.getElementById('scrape-btn') || document.getElementById('stats-scrape-btn');
-    if (btn) {
-        btn.disabled = true;
-        btn.innerHTML = '<span class="spinner"></span> Starting...';
+
+function phaseLabel(p) {
+    const phase = p && p.phase;
+    if (phase === 'scraping') {
+        const name = p.current || '';
+        const progress = `${p.completed || 0}/${p.total || 0}`;
+        return name ? `Scraping: ${name} (${progress})` : `Scraping ${progress}`;
     }
+    if (phase === 'enriching') return 'Enriching job details\u2026';
+    if (phase === 'classifying') return 'Classifying locations\u2026';
+    if (phase === 'scoring') {
+        const s = (p && p.scoring) || {};
+        return `Scoring: ${s.scored || 0}/${s.total || 0}`;
+    }
+    if (phase === 'done') return 'Done';
+    if (phase === 'error') return 'Error';
+    return 'Working\u2026';
+}
+
+function computeStallSec(p) {
+    if (!p || typeof p.server_now !== 'number' || typeof p.last_updated_at !== 'number') return 0;
+    return Math.max(0, p.server_now - p.last_updated_at);
+}
+
+function setCancelLinkVisible(visible, btn) {
+    const parent = btn.parentElement;
+    if (!parent) return;
+    let link = parent.querySelector('.scrape-cancel-link');
+    if (!visible) {
+        if (link) link.remove();
+        return;
+    }
+    if (link) return;
+    link = document.createElement('a');
+    link.className = 'scrape-cancel-link';
+    link.href = '#';
+    link.textContent = 'Cancel';
+    link.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        cancelScrape();
+    });
+    btn.insertAdjacentElement('afterend', link);
+}
+
+function renderScrapeButtonState(p) {
+    const btns = getScrapeButtons();
+    if (!btns.length) return;
+
+    const stallSec = computeStallSec(p);
+    const critical = stallSec > STALL_CRITICAL_SEC;
+    const warn = stallSec > STALL_WARN_SEC;
+
+    let label = phaseLabel(p);
+    if (warn) {
+        const secs = Math.round(stallSec);
+        const current = p.current || p.phase || 'working';
+        label = `Stalled \u2014 ${current} (${secs}s)`;
+    }
+
+    btns.forEach(btn => {
+        btn.disabled = true;
+        btn.classList.remove('scrape-btn-warn', 'scrape-btn-critical');
+        if (critical) btn.classList.add('scrape-btn-critical');
+        else if (warn) btn.classList.add('scrape-btn-warn');
+        btn.innerHTML = `<span class="spinner"></span> ${escapeHtml(label)}`;
+        setCancelLinkVisible(warn, btn);
+    });
+}
+
+function resetScrapeButtons() {
+    getScrapeButtons().forEach(btn => {
+        btn.disabled = false;
+        btn.classList.remove('scrape-btn-warn', 'scrape-btn-critical');
+        btn.textContent = 'Scrape Now';
+        setCancelLinkVisible(false, btn);
+    });
+}
+
+async function pollScrapeOnce() {
+    let p;
     try {
-        await api.triggerScrape();
-        startScrapePoll();
+        p = await api.getScrapeProgress();
+    } catch {
+        return;
+    }
+    lastScrapeState = p;
+
+    if (!p || !p.active) {
+        stopScrapePoll();
+        resetScrapeButtons();
+        currentScrapeTaskId = null;
+        if (p && p.phase === 'done') {
+            showScrapeSummaryToast(p);
+            handleRoute();
+        } else if (p && p.phase === 'error') {
+            showScrapeErrorToast(p);
+        }
+        return;
+    }
+
+    renderScrapeButtonState(p);
+
+    const stallSec = computeStallSec(p);
+    if (stallSec > STALL_CRITICAL_SEC && stallToastShownForTaskId !== p.task_id) {
+        stallToastShownForTaskId = p.task_id;
+        showToast('Scrape appears stuck \u2014 click Cancel to stop.', 'error');
+    }
+}
+
+function startScrapePoll(taskId) {
+    stopScrapePoll();
+    currentScrapeTaskId = taskId || null;
+    stallToastShownForTaskId = null;
+    pollScrapeOnce();
+    scrapePollInterval = setInterval(pollScrapeOnce, SCRAPE_POLL_MS);
+}
+
+async function handleScrape() {
+    const btns = getScrapeButtons();
+    btns.forEach(btn => {
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner"></span> Starting\u2026';
+        setCancelLinkVisible(false, btn);
+    });
+    try {
+        const result = await api.triggerScrape();
+        startScrapePoll(result && result.task_id);
     } catch (err) {
         showToast(err.message, 'error');
-        if (btn) {
-            btn.disabled = false;
-            btn.textContent = 'Scrape Now';
-        }
+        resetScrapeButtons();
     }
+}
+
+async function cancelScrape() {
+    try {
+        await api.cancelScrape();
+        getScrapeButtons().forEach(btn => {
+            btn.innerHTML = '<span class="spinner"></span> Cancelling\u2026';
+        });
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+function showToastWithAction(message, type, actionText, onAction) {
+    const container = document.getElementById('toast-container');
+    if (!container) return;
+    const toast = document.createElement('div');
+    toast.className = `toast toast-${type} toast-with-action`;
+    const msg = document.createElement('span');
+    msg.textContent = message;
+    const action = document.createElement('button');
+    action.className = 'toast-action-btn';
+    action.type = 'button';
+    action.textContent = actionText;
+    action.addEventListener('click', () => {
+        toast.remove();
+        try { onAction(); } catch {}
+    });
+    toast.appendChild(msg);
+    toast.appendChild(document.createTextNode(' '));
+    toast.appendChild(action);
+    container.appendChild(toast);
+    setTimeout(() => {
+        toast.classList.add('toast-dismiss');
+        toast.addEventListener('animationend', () => toast.remove());
+    }, 8000);
+}
+
+function showScrapeSummaryToast(p) {
+    const sources = p.sources || [];
+    const ok = sources.filter(s => s.status === 'ok').length;
+    const timeout = sources.filter(s => s.status === 'timeout').length;
+    const failed = sources.filter(s => s.status === 'failed').length;
+    const total = p.total || sources.length;
+
+    let summary = `Scrape complete \u2014 ${p.new_jobs || 0} new jobs. ${ok}/${total} sources ok`;
+    if (timeout) summary += `, ${timeout} timeout`;
+    if (failed) summary += `, ${failed} failed`;
+
+    showToastWithAction(summary, 'success', 'View details', () => showScrapeDetailsModal(p));
+}
+
+function showScrapeErrorToast(p) {
+    const first = (p.errors && p.errors[0]) || 'unknown error';
+    showToastWithAction(`Scrape failed \u2014 ${first}`, 'error', 'View details', () => showScrapeDetailsModal(p));
+}
+
+function sourceStatusBadgeHTML(status) {
+    const map = {
+        ok: 'score-badge-green',
+        failed: 'score-badge-red',
+        timeout: 'score-badge-amber',
+        skipped: 'score-badge-gray',
+        running: 'score-badge-gray',
+        pending: 'score-badge-gray',
+    };
+    const cls = map[status] || 'score-badge-gray';
+    return `<span class="score-badge ${cls}">${escapeHtml(status || '')}</span>`;
+}
+
+function showScrapeDetailsModal(p) {
+    const existing = document.getElementById('app-modal');
+    if (existing) existing.remove();
+
+    const sources = p.sources || [];
+    const rows = sources.map(s => `
+        <tr>
+            <td>${escapeHtml(s.name || '')}</td>
+            <td>${sourceStatusBadgeHTML(s.status)}</td>
+            <td>${s.duration_ms != null ? (s.duration_ms / 1000).toFixed(1) + 's' : '\u2014'}</td>
+            <td>${s.listings_found || 0}</td>
+            <td>${s.new_jobs || 0}</td>
+            <td>${s.error ? escapeHtml(s.error) : '\u2014'}</td>
+        </tr>
+    `).join('');
+
+    const errorsHtml = (p.errors && p.errors.length)
+        ? `<div class="scrape-modal-errors"><strong>Pipeline errors:</strong><ul>${p.errors.map(e => `<li>${escapeHtml(e)}</li>`).join('')}</ul></div>`
+        : '';
+
+    const scoring = p.scoring || {};
+    const scoringHtml = (scoring.total || scoring.scored || scoring.skipped_reason)
+        ? `<div class="scrape-modal-scoring"><strong>Scoring:</strong> ${scoring.skipped_reason ? escapeHtml('skipped \u2014 ' + scoring.skipped_reason) : `${scoring.scored || 0}/${scoring.total || 0}`}</div>`
+        : '';
+
+    const modal = document.createElement('div');
+    modal.id = 'app-modal';
+    modal.innerHTML = `
+        <div class="modal-overlay">
+            <div class="modal-content modal-wide" role="dialog" aria-modal="true" aria-labelledby="scrape-modal-title">
+                <div class="scrape-modal-header">
+                    <h3 id="scrape-modal-title" class="modal-title">Scrape Details</h3>
+                    <button class="btn btn-ghost btn-sm" id="scrape-modal-close" type="button">Close</button>
+                </div>
+                <div class="scrape-modal-summary">
+                    Phase: <strong>${escapeHtml(p.phase || '')}</strong> \u2014 ${p.new_jobs || 0} new jobs
+                </div>
+                ${scoringHtml}
+                <table class="scrape-sources-table">
+                    <thead>
+                        <tr><th>Source</th><th>Status</th><th>Duration</th><th>Listings</th><th>New</th><th>Error</th></tr>
+                    </thead>
+                    <tbody>${rows || '<tr><td colspan="6">No sources recorded.</td></tr>'}</tbody>
+                </table>
+                ${errorsHtml}
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+
+    modal.querySelector('#scrape-modal-close').addEventListener('click', () => modal.remove());
+    modal.querySelector('.modal-overlay').addEventListener('click', (e) => {
+        if (e.target === e.currentTarget) modal.remove();
+    });
+    modal.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') { e.stopPropagation(); modal.remove(); }
+    });
+}
+
+async function initScrapeResume() {
+    try {
+        const p = await api.getScrapeProgress();
+        if (p && p.active) {
+            startScrapePoll(p.task_id);
+        }
+    } catch {}
 }
 
 // === Theme Toggle ===
@@ -582,4 +824,5 @@ document.addEventListener('DOMContentLoaded', () => {
 
     updateNotifBadge();
     initNotificationSSE();
+    initScrapeResume();
 });

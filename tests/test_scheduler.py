@@ -132,7 +132,9 @@ async def test_maintenance_cycle(db):
 
 @pytest.mark.asyncio
 async def test_scrape_cycle_tracks_progress(db):
-    """Progress dict is updated during scrape."""
+    """Progress dict is updated during scrape. Per the robust-scrape-now
+    contract, `run_scrape_cycle` never touches `active` or `phase` — the
+    router owns lifecycle. It only updates counters and source entries."""
     scraper = make_mock_scraper("test", [
         JobListing(
             title="Job", company="Co", location="Remote",
@@ -140,8 +142,20 @@ async def test_scrape_cycle_tracks_progress(db):
             source="test",
         )
     ])
-    progress = {"completed": 0, "total": 0, "current": None, "new_jobs": 0, "active": True}
+    progress = {
+        "completed": 0,
+        "total": 0,
+        "current": None,
+        "new_jobs": 0,
+        "active": True,
+        "sources": [],
+        "last_updated_at": 0.0,
+    }
     await run_scrape_cycle(db, scrapers=[scraper], progress=progress)
-    assert progress["active"] is False
+    # Scheduler must leave `active` alone — router owns it.
+    assert progress["active"] is True
     assert progress["completed"] == 1
     assert progress["new_jobs"] == 1
+    assert len(progress["sources"]) == 1
+    assert progress["sources"][0]["status"] == "ok"
+    assert progress["sources"][0]["new_jobs"] == 1

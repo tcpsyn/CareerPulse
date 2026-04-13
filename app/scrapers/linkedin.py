@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 class LinkedInScraper(BaseScraper):
     source_name = "linkedin"
 
-    BASE_URL = "https://www.linkedin.com/jobs/search"
+    BASE_URL = "https://www.linkedin.com/jobs-guest/jobs/api/seeMoreJobPostings/search"
 
     # f_TPR values: r86400 = past 24h, r604800 = past week, r2592000 = past month
     TIME_FILTER = "r604800"  # Past week
@@ -23,8 +23,6 @@ class LinkedInScraper(BaseScraper):
             "keywords": query,
             "location": "United States",
             "f_TPR": self.TIME_FILTER,
-            "position": "1",
-            "pageNum": str(start // 25),
             "start": str(start),
         }
 
@@ -155,7 +153,7 @@ class LinkedInScraper(BaseScraper):
 
         async with self.get_client() as client:
             for query in queries:
-                for start in [0, 25]:  # 2 pages per query (25 results each)
+                for start in [0, 10, 20, 30]:  # guest API returns 10 per page
                     jobs = await self._fetch_page(client, query, start)
                     logger.info(f"LinkedIn: '{query}' start={start} returned {len(jobs)} jobs")
 

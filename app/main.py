@@ -60,6 +60,9 @@ async def lifespan(app: FastAPI):
     db_path = app.state.db_path
     testing = getattr(app.state, "testing", False)
     os.makedirs(os.path.dirname(db_path) or "data", exist_ok=True)
+    # Stale-state recovery: a crashed previous run must never leave active=true.
+    app.state.scrape_progress = None
+    app.state.scrape_task = None
     app.state.db = Database(db_path)
     await app.state.db.init()
     await app.state.db.migrate_resume_from_search_config()
@@ -103,11 +106,21 @@ async def lifespan(app: FastAPI):
         ai_settings = await app.state.db.get_ai_settings()
         client = _build_ai_client(ai_settings, settings.anthropic_api_key)
 
+        candidate_focus = None
+        search_config = await app.state.db.get_search_config()
+        if search_config:
+            candidate_focus = {
+                "job_titles": search_config.get("job_titles", []),
+                "seniority": search_config.get("seniority", ""),
+                "summary": search_config.get("summary", ""),
+                "key_skills": search_config.get("key_skills", []),
+            }
+
         logger.info(f"Lifespan: client={'yes' if client else 'no'}, resume={len(resume_text)} chars")
         if client and resume_text:
             from app.matcher import JobMatcher
             from app.tailoring import Tailor
-            app.state.matcher = JobMatcher(client, resume_text)
+            app.state.matcher = JobMatcher(client, resume_text, candidate_focus=candidate_focus)
             app.state.tailor = Tailor(client, resume_text)
             logger.info("Matcher and Tailor initialized")
         else:
@@ -255,8 +268,8 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
 
     app.state.scoring_progress = None
     app.state.scrape_progress = None
+    app.state.scrape_task = None
     app.state.scoring_lock = asyncio.Lock()
-    app.state.scrape_lock = asyncio.Lock()
     app.state.notification_subscribers: list[asyncio.Queue] = []
     app.state.notification_lock = asyncio.Lock()
     app.state.queue_subscribers: list[asyncio.Queue] = []
@@ -309,6 +322,7 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
                         await db.insert_score(
                             r["job_id"], r["score"], r["reasons"],
                             r["concerns"], r["keywords"],
+                            role_match=r.get("role_match", True),
                         )
                         await asyncio.sleep(0)  # Yield between DB writes
                         job = await db.get_job(r["job_id"])
@@ -323,13 +337,22 @@ def create_app(db_path: str = "data/jobfinder.db", testing: bool = False) -> Fas
                 app.state.scoring_progress = {"scored": scored, "total": total, "active": False}
                 logger.info(f"Scoring complete: {scored}/{total} jobs")
 
-    def _reinit_ai_services(client: AIClient | None, resume_text: str = ""):
+    async def _reinit_ai_services(client: AIClient | None, resume_text: str = ""):
         """Re-initialize matcher and tailor with new AI client."""
         app.state.ai_client = client
         if client and resume_text:
             from app.matcher import JobMatcher
             from app.tailoring import Tailor
-            app.state.matcher = JobMatcher(client, resume_text)
+            candidate_focus = None
+            search_config = await app.state.db.get_search_config()
+            if search_config:
+                candidate_focus = {
+                    "job_titles": search_config.get("job_titles", []),
+                    "seniority": search_config.get("seniority", ""),
+                    "summary": search_config.get("summary", ""),
+                    "key_skills": search_config.get("key_skills", []),
+                }
+            app.state.matcher = JobMatcher(client, resume_text, candidate_focus=candidate_focus)
             app.state.tailor = Tailor(client, resume_text)
         else:
             app.state.matcher = None

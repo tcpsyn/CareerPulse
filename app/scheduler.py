@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 
 from app.circuit_breaker import CircuitBreaker
 from app.database import Database, make_dedup_hash
@@ -13,35 +14,100 @@ _enrichment_semaphore = asyncio.Semaphore(3)
 _consecutive_zero_runs: dict[str, int] = {}
 ZERO_RESULT_WARN_THRESHOLD = 3
 
+# Per-scraper hard timeout — a single hung source must never block the cycle.
+PER_SCRAPER_TIMEOUT = 120
+# Heartbeat the progress state every N listings inside the insert loop
+# so large payloads do not trip client-side stall detection.
+_HEARTBEAT_EVERY = 25
+
 
 async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str] | None = None, progress: dict | None = None, scraper_keys: dict | None = None, force: bool = False) -> int:
-    """Scrape job boards and insert new listings. Scrape-only — no enrichment or scoring."""
+    """Scrape job boards and insert new listings. Scrape-only — no enrichment or scoring.
+
+    Progress contract: this function updates `completed`, `current`, `new_jobs`, `sources`,
+    and bumps `last_updated_at` on every mutation. It never touches `active` or `phase` —
+    the router owns lifecycle. Each scraper is wrapped in `asyncio.wait_for` so a single
+    hung source cannot block the whole cycle.
+    """
     total_new = 0
     total_scrapers = len(scrapers)
+    if progress is not None and "sources" not in progress:
+        progress["sources"] = []
+
+    def _heartbeat():
+        if progress is not None:
+            progress["last_updated_at"] = time.monotonic()
+
     for i, scraper_instance in enumerate(scrapers):
         if isinstance(scraper_instance, type):
             scraper_instance = scraper_instance(search_terms=search_terms, scraper_keys=scraper_keys or {})
         source_name = scraper_instance.source_name
+
+        src: dict | None = None
+        if progress is not None:
+            src = {
+                "name": source_name,
+                "status": "running",
+                "listings_found": 0,
+                "new_jobs": 0,
+                "error": None,
+                "duration_ms": None,
+            }
+            progress["sources"].append(src)
+            progress["current"] = source_name
+            progress["completed"] = i
+            progress["total"] = total_scrapers
+            progress["new_jobs"] = total_new
+            _heartbeat()
+
         # Check per-source schedule (bypass for manual triggers)
         if not force and not await db.should_scraper_run(source_name):
             logger.info(f"Skipping {source_name} — not yet due")
+            if src is not None:
+                src["status"] = "skipped"
+                src["error"] = "not yet due"
             if progress is not None:
-                progress.update({"completed": i + 1, "total": total_scrapers, "current": source_name, "new_jobs": total_new, "active": True})
+                progress["completed"] = i + 1
+                _heartbeat()
             continue
         if _scraper_breaker.is_open(f"scraper:{source_name}"):
             logger.info(f"Circuit breaker open for {source_name}, skipping")
+            if src is not None:
+                src["status"] = "skipped"
+                src["error"] = "circuit breaker open"
             if progress is not None:
-                progress.update({"completed": i + 1, "total": total_scrapers, "current": source_name, "new_jobs": total_new, "active": True})
+                progress["completed"] = i + 1
+                _heartbeat()
             continue
+
         logger.info(f"Scraping {source_name}...")
-        if progress is not None:
-            progress.update({"completed": i, "total": total_scrapers, "current": source_name, "new_jobs": total_new, "active": True})
+        t0 = time.monotonic()
         try:
-            listings = await scraper_instance.scrape()
+            listings = await asyncio.wait_for(
+                scraper_instance.scrape(), timeout=PER_SCRAPER_TIMEOUT
+            )
             _scraper_breaker.record_success(f"scraper:{source_name}")
+        except asyncio.TimeoutError:
+            if src is not None:
+                src["status"] = "timeout"
+                src["error"] = f"exceeded {PER_SCRAPER_TIMEOUT}s"
+                src["duration_ms"] = int((time.monotonic() - t0) * 1000)
+            _scraper_breaker.record_failure(f"scraper:{source_name}")
+            logger.warning(f"{source_name}: timeout after {PER_SCRAPER_TIMEOUT}s")
+            if progress is not None:
+                progress["completed"] = i + 1
+                _heartbeat()
+            continue
         except Exception as e:
+            if src is not None:
+                src["status"] = "failed"
+                src["error"] = str(e)[:200]
+                src["duration_ms"] = int((time.monotonic() - t0) * 1000)
             _scraper_breaker.record_failure(f"scraper:{source_name}")
             logger.error(f"Scraper {source_name} failed: {e}")
+            if progress is not None:
+                progress["completed"] = i + 1
+                _heartbeat()
             continue
 
         # Pre-filter: skip listings from disallowed regions at scrape time
@@ -52,8 +118,9 @@ async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str]
         # Also allow unknown/ambiguous through (conservative)
         skipped_region = 0
         skipped_work_type = 0
+        src_new_jobs = 0
 
-        for listing in listings:
+        for li, listing in enumerate(listings):
             # Quick rule-based check before inserting
             region = classify_location_rule_based(listing.location)
             if region is not None and region.lower() not in allowed_set:
@@ -96,9 +163,23 @@ async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str]
                     else:
                         await db.insert_source(job_id, source_name, listing.url)
                         total_new += 1
+                        src_new_jobs += 1
                     # Pre-classify if rule-based matched
                     if region is not None:
                         await db.set_job_location_region(job_id, region)
+
+            if progress is not None and (li + 1) % _HEARTBEAT_EVERY == 0:
+                progress["new_jobs"] = total_new
+                if src is not None:
+                    src["listings_found"] = li + 1
+                    src["new_jobs"] = src_new_jobs
+                _heartbeat()
+
+        if src is not None:
+            src["status"] = "ok"
+            src["listings_found"] = len(listings)
+            src["new_jobs"] = src_new_jobs
+            src["duration_ms"] = int((time.monotonic() - t0) * 1000)
 
         skip_parts = []
         if skipped_region:
@@ -124,8 +205,15 @@ async def run_scrape_cycle(db: Database, scrapers: list, search_terms: list[str]
 
         await db.mark_scraper_ran(source_name)
 
+        if progress is not None:
+            progress["completed"] = i + 1
+            progress["new_jobs"] = total_new
+            _heartbeat()
+
     if progress is not None:
-        progress.update({"completed": total_scrapers, "total": total_scrapers, "current": None, "new_jobs": total_new, "active": False})
+        progress["current"] = None
+        progress["new_jobs"] = total_new
+        _heartbeat()
     logger.info(f"Scrape cycle complete. {total_new} new jobs added.")
     return total_new
 

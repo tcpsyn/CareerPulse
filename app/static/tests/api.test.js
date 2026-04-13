@@ -160,14 +160,64 @@ describe('api.uploadResume', () => {
 });
 
 describe('api.triggerScrape', () => {
-    it('POSTs to scrape endpoint', async () => {
+    it('POSTs to scrape endpoint and returns task_id on 202', async () => {
         globalThis.fetch = vi.fn().mockResolvedValue({
             ok: true,
-            json: () => Promise.resolve({}),
+            status: 202,
+            json: () => Promise.resolve({ task_id: 'abc', status: 'started' }),
         });
 
-        await api.triggerScrape();
+        const result = await api.triggerScrape();
         expect(fetch.mock.calls[0][0]).toBe('/api/scrape');
+        expect(fetch.mock.calls[0][1].method).toBe('POST');
+        expect(result).toEqual({ task_id: 'abc', status: 'started' });
+    });
+
+    it('returns already_running on 409 without throwing', async () => {
+        globalThis.fetch = vi.fn().mockResolvedValue({
+            ok: false,
+            status: 409,
+            json: () => Promise.resolve({ error: 'scrape_already_running', task_id: 'xyz' }),
+        });
+
+        const result = await api.triggerScrape();
+        expect(result).toEqual({ task_id: 'xyz', status: 'already_running' });
+    });
+
+    it('throws on other error status codes', async () => {
+        globalThis.fetch = vi.fn().mockResolvedValue({
+            ok: false,
+            status: 500,
+            json: () => Promise.resolve({ detail: 'Internal error' }),
+        });
+
+        await expect(api.triggerScrape()).rejects.toThrow('Internal error');
+    });
+});
+
+describe('api.getScrapeProgress', () => {
+    it('GETs progress endpoint', async () => {
+        globalThis.fetch = vi.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ active: false, phase: 'done' }),
+        });
+
+        await api.getScrapeProgress();
+        expect(fetch.mock.calls[0][0]).toBe('/api/scrape/progress');
+    });
+});
+
+describe('api.cancelScrape', () => {
+    it('POSTs to cancel endpoint', async () => {
+        globalThis.fetch = vi.fn().mockResolvedValue({
+            ok: true,
+            status: 200,
+            json: () => Promise.resolve({ cancelled: true }),
+        });
+
+        await api.cancelScrape();
+        expect(fetch.mock.calls[0][0]).toBe('/api/scrape/cancel');
         expect(fetch.mock.calls[0][1].method).toBe('POST');
     });
 });

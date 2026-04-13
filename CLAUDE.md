@@ -18,9 +18,9 @@ docker compose up -d
 - Vanilla JS frontend (served from `app/static/`)
 
 ## Key Architecture
-- `app/main.py` — FastAPI app assembler: `create_app` factory + lifespan (378 lines); initializes dual DB connections: `app.state.db` for request handlers, `app.state.bg_db` for background tasks (prevents connection contention)
+- `app/main.py` — FastAPI app assembler: `create_app` factory + lifespan (378 lines); initializes dual DB connections: `app.state.db` for request handlers, `app.state.bg_db` for background tasks (prevents connection contention); lifespan resets `app.state.scrape_progress = None` and `app.state.scrape_task = None` on startup (stale-state guard — ensures `active` is never `true` from a crashed previous run)
 - `app/routers/` — API routes split into 12 modules: `jobs.py`, `tailoring.py`, `pipeline.py`, `queue.py`, `contacts.py`, `analytics.py`, `settings.py`, `alerts.py`, `scraping.py`, `autofill.py`, `interviews.py`, `calendar.py`
-  - `scraping.py`: manual scrape endpoint accepts `force=True` to bypass schedule check; uses `bg_db` for all DB access; scoring uses `asyncio.sleep(0)` between jobs to yield the event loop
+  - `scraping.py`: implements the Scrape Now phase pipeline (design: `docs/plans/2026-04-12-robust-scrape-now-design.md`); phases: `scraping → enriching → classifying → scoring → done/error`; `_set_phase()` transitions state and bumps `last_updated_at` heartbeat; `_fresh_state()` initializes `scrape_progress` per run; **concurrency guard**: `POST /api/scrape` returns `409 {"error": "scrape_already_running", "task_id": ...}` if `scrape_progress.active` is true — `app.state.scrape_lock` is removed; **cancel**: `POST /api/scrape/cancel` calls `scrape_task.cancel()`, catches `CancelledError` → sets `phase="error"`, appends `"Cancelled by user"` to errors, returns `404` if no active scrape; `GET /api/scrape/progress` returns full state plus `server_now` (monotonic) so the client can compute stall duration without a shared clock; `scrape_progress` shape: `{active, phase, started_at, last_updated_at, current, completed, total, new_jobs, sources: [{name, status, listings_found, new_jobs, error, duration_ms}], scoring: {scored, total, skipped_reason}, errors, task_id}`; router owns `active`/`phase` — `run_scrape_cycle` never touches them
   - `interviews.py`: interview rounds CRUD per application; promote-to-contact endpoint links interviewers to the contacts CRM
   - `calendar.py`: calendar events API aggregates interviews + application deadlines; `GET /api/calendar/ical` serves an iCal feed for external calendar subscriptions
 - `app/database.py` — async SQLite via aiosqlite (37 tables, FK enforcement, WAL mode); `jobs.last_seen_at` updated each scrape cycle, drives freshness filtering and 30-day auto-dismiss
@@ -30,7 +30,7 @@ docker compose up -d
 - `app/ai_client.py` — multi-provider AI client (Anthropic, OpenAI, Google, OpenRouter, Ollama)
 - `app/pdf_generator.py` — resume/cover letter PDF output
 - `app/docx_generator.py` — resume/cover letter DOCX output
-- `app/scheduler.py` — 8 periodic background jobs (scrape, enrich, score, maintain, remind, digest, alert, embed)
+- `app/scheduler.py` — 8 periodic background jobs (scrape, enrich, score, maintain, remind, digest, alert, embed); `PER_SCRAPER_TIMEOUT = 120` wraps each `scraper.scrape()` call via `asyncio.wait_for` — a single hung source is marked `timeout` and skipped without blocking the cycle; `run_scrape_cycle` never touches `active` or `phase` — the router owns lifecycle; heartbeat (`last_updated_at`) is bumped every 25 listings inside the insert loop so large payloads don't trip client-side stall detection
 - `app/digest.py` / `app/emailer.py` — email digest notifications
 - `app/follow_up.py` — AI-drafted follow-up emails
 - `app/predictor.py` — application success prediction
