@@ -56,8 +56,24 @@ const api = {
         return this.request('POST', `/api/jobs/${id}/application?${qs}`);
     },
 
-    triggerScrape() {
-        return this.request('POST', '/api/scrape');
+    async triggerScrape() {
+        const res = await fetch('/api/scrape', { method: 'POST' });
+        const body = await res.json().catch(() => ({}));
+        if (res.status === 202 || res.status === 409) {
+            return {
+                task_id: body.task_id || null,
+                status: res.status === 409 ? 'already_running' : (body.status || 'started'),
+            };
+        }
+        throw new Error(body.error || body.detail || `Scrape failed: ${res.status}`);
+    },
+
+    getScrapeProgress() {
+        return this.request('GET', '/api/scrape/progress');
+    },
+
+    cancelScrape() {
+        return this.request('POST', '/api/scrape/cancel');
     },
 
     draftEmail(id) {

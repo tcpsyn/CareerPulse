@@ -73,7 +73,7 @@ MOCK_LINKEDIN_HTML = """
 @pytest.mark.asyncio
 async def test_linkedin_parse(httpx_mock):
     httpx_mock.add_response(
-        url=re.compile(r"https://www\.linkedin\.com/jobs/search\?.*"),
+        url=re.compile(r"https://www\.linkedin\.com/jobs-guest/jobs/api/seeMoreJobPostings/search\?.*"),
         text=MOCK_LINKEDIN_HTML,
     )
     scraper = LinkedInScraper()
@@ -104,7 +104,7 @@ async def test_linkedin_parse(httpx_mock):
 async def test_linkedin_deduplicates(httpx_mock):
     # Same HTML returned for multiple pages — should deduplicate
     httpx_mock.add_response(
-        url=re.compile(r"https://www\.linkedin\.com/jobs/search\?.*"),
+        url=re.compile(r"https://www\.linkedin\.com/jobs-guest/jobs/api/seeMoreJobPostings/search\?.*"),
         text=MOCK_LINKEDIN_HTML,
     )
     scraper = LinkedInScraper()
@@ -117,7 +117,7 @@ async def test_linkedin_deduplicates(httpx_mock):
 @pytest.mark.asyncio
 async def test_linkedin_handles_empty(httpx_mock):
     httpx_mock.add_response(
-        url=re.compile(r"https://www\.linkedin\.com/jobs/search\?.*"),
+        url=re.compile(r"https://www\.linkedin\.com/jobs-guest/jobs/api/seeMoreJobPostings/search\?.*"),
         text="<html><body></body></html>",
     )
     scraper = LinkedInScraper()
@@ -129,7 +129,7 @@ async def test_linkedin_handles_empty(httpx_mock):
 @pytest.mark.asyncio
 async def test_linkedin_handles_error(httpx_mock):
     httpx_mock.add_response(
-        url=re.compile(r"https://www\.linkedin\.com/jobs/search\?.*"),
+        url=re.compile(r"https://www\.linkedin\.com/jobs-guest/jobs/api/seeMoreJobPostings/search\?.*"),
         status_code=429,
     )
     scraper = LinkedInScraper()
@@ -158,7 +158,7 @@ async def test_linkedin_salary_parsing():
 @pytest.mark.asyncio
 async def test_linkedin_custom_search_terms(httpx_mock):
     httpx_mock.add_response(
-        url=re.compile(r"https://www\.linkedin\.com/jobs/search\?.*"),
+        url=re.compile(r"https://www\.linkedin\.com/jobs-guest/jobs/api/seeMoreJobPostings/search\?.*"),
         text=MOCK_LINKEDIN_HTML,
     )
     scraper = LinkedInScraper(search_terms=["kubernetes remote", "terraform remote"])
