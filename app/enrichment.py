@@ -41,7 +41,7 @@ async def fetch_linkedin_guest_api(job_id: str) -> str | None:
         logger.warning(f"LinkedIn guest API failed for job {job_id}: {e}")
         return None
 
-    soup = BeautifulSoup(resp.content, "html.parser")
+    soup = BeautifulSoup(resp.content, "lxml")
     el = soup.select_one(".description__text, .show-more-less-html__markup")
     if el:
         text = el.get_text(separator="\n", strip=True)
@@ -138,7 +138,7 @@ async def _fetch_and_extract(url: str, source: str) -> str | None:
         logger.warning(f"Enrichment fetch failed for {url}: {e}")
         return None
 
-    soup = BeautifulSoup(resp.content, "html.parser")
+    soup = BeautifulSoup(resp.content, "lxml")
     extractors = {
         "linkedin": _extract_linkedin,
         "dice": _extract_dice,
@@ -160,7 +160,7 @@ def _extract_dice(soup: BeautifulSoup) -> str | None:
             data = json.loads(script.string)
             desc_html = data.get("description", "")
             if desc_html:
-                text = BeautifulSoup(desc_html, "html.parser").get_text(separator="\n", strip=True)
+                text = BeautifulSoup(desc_html, "lxml").get_text(separator="\n", strip=True)
                 if len(text) > 100:
                     return text
         except (json.JSONDecodeError, TypeError):
@@ -184,7 +184,7 @@ def _extract_generic(soup: BeautifulSoup) -> str | None:
                 if item.get("@type") in ("JobPosting", "jobPosting"):
                     desc_html = item.get("description", "")
                     if desc_html:
-                        text = BeautifulSoup(desc_html, "html.parser").get_text(separator="\n", strip=True)
+                        text = BeautifulSoup(desc_html, "lxml").get_text(separator="\n", strip=True)
                         if len(text) > 100:
                             return text
         except (_json.JSONDecodeError, TypeError, AttributeError):
