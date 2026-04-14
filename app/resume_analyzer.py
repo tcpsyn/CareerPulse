@@ -117,17 +117,23 @@ Return ONLY valid JSON with this exact structure:
 }}
 
 Guidelines:
-- search_terms: 8-15 specific phrases to use as search queries on job boards (e.g. "senior devops engineer remote", "SRE remote", "platform engineer remote")
-- job_titles: 5-10 job titles with a brief explanation of WHY this resume fits each role
+- search_terms: 8-12 GENERIC job-title queries to use as search-box input on job boards. These must be SHORT (1-4 words) and match how recruiters name roles, NOT how the candidate describes themselves.
+  * GOOD: "Site Reliability Engineer", "Platform Engineer", "Infrastructure Engineer", "DevOps Engineer", "Kubernetes Engineer", "Staff Infrastructure Engineer", "Principal Platform Engineer", "MLOps Engineer", "Cloud Architect"
+  * BAD: "Senior Engineer Infrastructure Full-Stack AI Remote" (word salad), "Lead DevOps with AWS and Kubernetes" (descriptive, not a real job title), "Python developer remote full-stack" (too many keywords ANDed together)
+  * DO NOT echo the candidate's resume header or self-description verbatim — extract the CORE role title only.
+  * DO NOT append "remote", "full-time", "senior", "contract", or location terms — these are applied by separate filters at scrape time and double-restrict the query.
+  * DO NOT combine unrelated skills into one term (e.g. "Full-Stack AI Kubernetes Engineer" is not a real job posting title).
+  * Each term should be something a recruiter would plausibly type as the exact job title in a posting.
+  * Include BOTH the candidate's most recent title AND adjacent/broader titles they would also qualify for.
+  * Include 2-3 seniority variations (e.g. "Senior Platform Engineer", "Staff Platform Engineer", "Principal Platform Engineer") if the candidate is senior+.
+- job_titles: 5-10 job titles with a brief explanation of WHY this resume fits each role. Same rules as search_terms — real role names, no word salads.
 - key_skills: The candidate's top 10-15 technical and domain skills extracted from the resume
 - seniority: The appropriate seniority level based on years of experience and roles held
 - summary: What makes this candidate unique and what types of roles they should target
-- IMPORTANT: The candidate's own job title, headline, and professional summary are the strongest signal for what roles they want. Use these to determine the PRIMARY focus of search terms and job titles. Do not over-index on secondary skills mentioned in past roles.
-- ORDER search_terms by relevance: put terms matching the candidate's self-stated title and summary FIRST, then broader/adjacent terms after
-- Focus on the candidate's strongest skills and most recent experience
-- Include both broad and niche search terms
-- Add "remote" to search terms where appropriate
-- Consider the seniority level evident in the resume
+- IMPORTANT: The candidate's self-stated title tells you what KIND of role they want, but DO NOT copy it as a search term. Translate it into the standard recruiter-facing title equivalent.
+- ORDER search_terms by relevance: most likely match first, broader/adjacent after.
+- Focus on the candidate's strongest skills and most recent experience.
+- Consider the seniority level evident in the resume.
 - ats_score: Rate 0-100 how ATS-friendly this resume's CONTENT and STRUCTURE is based on the text you can see. Evaluate:
   * Does it have clearly labeled standard sections (SUMMARY, TECHNICAL SKILLS, EXPERIENCE, EDUCATION, CERTIFICATIONS)?
   * Are skills listed in a dedicated section with clear categories?
