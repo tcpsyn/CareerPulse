@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 
 import httpx
 from tenacity import (
@@ -268,9 +269,81 @@ class AIClient:
 
 
 def parse_json_response(raw: str) -> dict:
-    """Strip markdown code fences and parse JSON from AI response."""
+    """Extract and parse JSON from an AI response.
+
+    Handles markdown code fences, leading/trailing prose, and (as a last
+    resort) truncated responses from a max_tokens cut-off by finding the
+    outermost balanced ``{...}`` and trimming any unterminated trailing
+    string/array before attempting to load.
+    """
     raw = raw.strip()
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[1] if "\n" in raw else raw[3:]
         raw = raw.rsplit("```", 1)[0]
-    return json.loads(raw)
+        raw = raw.strip()
+
+    # Find the first top-level container — either an object or an array.
+    obj_start = raw.find("{")
+    arr_start = raw.find("[")
+    if obj_start == -1 and arr_start == -1:
+        raise json.JSONDecodeError("no JSON object or array found", raw, 0)
+    if obj_start == -1:
+        start = arr_start
+    elif arr_start == -1:
+        start = obj_start
+    else:
+        start = min(obj_start, arr_start)
+    top_level = raw[start]  # '{' or '['
+
+    stack: list[str] = []  # open '{' and '[' in order
+    in_string = False
+    escape = False
+    end = -1
+    for i in range(start, len(raw)):
+        ch = raw[i]
+        if escape:
+            escape = False
+            continue
+        if ch == "\\" and in_string:
+            escape = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == "{" or ch == "[":
+            stack.append(ch)
+        elif ch == "}" and stack and stack[-1] == "{":
+            stack.pop()
+            if not stack:
+                end = i + 1
+                break
+        elif ch == "]" and stack and stack[-1] == "[":
+            stack.pop()
+            if not stack:
+                end = i + 1
+                break
+
+    if end != -1:
+        candidate = raw[start:end]
+    else:
+        # Truncated mid-object — best-effort repair: close any open string,
+        # drop the trailing incomplete token, and close open containers.
+        candidate = raw[start:]
+        if in_string:
+            candidate += '"'
+        # Drop a trailing partial key/value/number (anything after the last
+        # delimiter that might be incomplete)
+        candidate = re.sub(r",\s*[^,{}\[\]]*$", "", candidate.rstrip())
+        candidate = candidate.rstrip().rstrip(",")
+        for opener in reversed(stack):
+            candidate += "}" if opener == "{" else "]"
+
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        # Aggressive second-chance: strip the last incomplete field before
+        # the closing braces and retry.
+        trimmed = re.sub(r',\s*"[^"]*"\s*:\s*[^,}\]]*(?=[}\]]+$)', "", candidate)
+        return json.loads(trimmed)

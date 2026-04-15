@@ -36,7 +36,7 @@ async def predict_success(client: AIClient, history: str,
         history=history, title=title, company=company, description=description,
     )
     try:
-        raw = await client.chat(prompt, max_tokens=512)
+        raw = await client.chat(prompt, max_tokens=1500)
         return parse_json_response(raw)
     except Exception as e:
         logger.error(f"Prediction failed: {e}")
