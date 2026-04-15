@@ -3125,3 +3125,113 @@ kbd {
         overflow: visible;
     }
 }
+
+/* === Scrape Now: stall states, cancel link, details modal === */
+.scrape-btn-warn {
+    border-color: #f59e0b !important;
+    box-shadow: 0 0 0 1px #f59e0b inset;
+}
+
+.scrape-btn-critical {
+    border-color: var(--danger) !important;
+    color: var(--danger) !important;
+    box-shadow: 0 0 0 1px var(--danger) inset;
+}
+
+.scrape-cancel-link {
+    margin-left: 8px;
+    font-size: 0.8125rem;
+    color: var(--danger);
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.scrape-cancel-link:hover {
+    color: var(--danger-hover);
+}
+
+.toast-with-action {
+    gap: 12px;
+}
+
+.toast-action-btn {
+    margin-left: auto;
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+    padding: 4px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 0.8125rem;
+    cursor: pointer;
+    white-space: nowrap;
+}
+
+.toast-action-btn:hover {
+    background: var(--bg-hover, rgba(0, 0, 0, 0.05));
+}
+
+.score-badge-red {
+    background: rgba(239, 68, 68, 0.15);
+    color: var(--danger);
+}
+
+.modal-wide {
+    max-width: 760px;
+    width: 92vw;
+}
+
+.scrape-modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+}
+
+.scrape-modal-summary,
+.scrape-modal-scoring {
+    font-size: 0.875rem;
+    color: var(--text-primary);
+    margin-bottom: 12px;
+}
+
+.scrape-sources-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.8125rem;
+    margin-top: 8px;
+}
+
+.scrape-sources-table th,
+.scrape-sources-table td {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    text-align: left;
+    vertical-align: top;
+}
+
+.scrape-sources-table th {
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
+.scrape-sources-table td:nth-child(3),
+.scrape-sources-table td:nth-child(4),
+.scrape-sources-table td:nth-child(5) {
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+
+.scrape-modal-errors {
+    margin-top: 12px;
+    padding: 10px 12px;
+    background: rgba(239, 68, 68, 0.08);
+    border-left: 3px solid var(--danger);
+    border-radius: var(--radius-sm);
+    font-size: 0.8125rem;
+    color: var(--text-primary);
+}
+
+.scrape-modal-errors ul {
+    margin: 6px 0 0;
+    padding-left: 18px;
+}
