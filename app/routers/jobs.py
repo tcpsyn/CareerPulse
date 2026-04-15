@@ -99,6 +99,7 @@ async def save_external_job(request: Request):
                             result.get("reasons", []),
                             result.get("concerns", []),
                             result.get("keywords", []),
+                            role_match=result.get("role_match", True),
                         )
                         logger.info(f"Scored added job {job_id}: {result.get('score', 0)}")
                 except Exception:

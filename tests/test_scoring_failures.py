@@ -180,6 +180,50 @@ class TestClearFailedScores:
         assert score["match_score"] == 0
 
 
+class TestRoleMatchPersistence:
+    """role_match should round-trip through insert_score/get_score."""
+
+    @pytest.mark.asyncio
+    async def test_role_match_false_persists(self, db):
+        job_id = await db.insert_job(
+            title="Full-Stack Dev", company="Co", location="Remote",
+            salary_min=None, salary_max=None, description="desc",
+            url="https://example.com/test-role-false", posted_date=None,
+            application_method="url", contact_email=None,
+        )
+        await db.insert_score(job_id, 45, [], ["Wrong role track"], [], role_match=False)
+        score = await db.get_score(job_id)
+        assert score is not None
+        assert score["role_match"] is False
+        assert score["match_score"] == 45
+
+    @pytest.mark.asyncio
+    async def test_role_match_true_persists(self, db):
+        job_id = await db.insert_job(
+            title="SRE", company="Co", location="Remote",
+            salary_min=None, salary_max=None, description="desc",
+            url="https://example.com/test-role-true", posted_date=None,
+            application_method="url", contact_email=None,
+        )
+        await db.insert_score(job_id, 85, ["Strong match"], [], [], role_match=True)
+        score = await db.get_score(job_id)
+        assert score is not None
+        assert score["role_match"] is True
+
+    @pytest.mark.asyncio
+    async def test_role_match_defaults_true(self, db):
+        job_id = await db.insert_job(
+            title="Default", company="Co", location="Remote",
+            salary_min=None, salary_max=None, description="desc",
+            url="https://example.com/test-role-default", posted_date=None,
+            application_method="url", contact_email=None,
+        )
+        # Call without role_match — should default to True
+        await db.insert_score(job_id, 70, [], [], [])
+        score = await db.get_score(job_id)
+        assert score["role_match"] is True
+
+
 @pytest.fixture
 async def db():
     """Provide a test database."""

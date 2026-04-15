@@ -248,6 +248,7 @@ class Database:
                 concerns TEXT NOT NULL,
                 suggested_keywords TEXT NOT NULL,
                 scored_at TEXT NOT NULL,
+                role_match INTEGER NOT NULL DEFAULT 1,
                 FOREIGN KEY (job_id) REFERENCES jobs(id) ON DELETE CASCADE
             );
             CREATE TABLE IF NOT EXISTS applications (
@@ -627,6 +628,16 @@ class Database:
             if col not in jobs_columns:
                 await self.db.execute(sql)
 
+        # job_scores migrations
+        scores_cursor = await self.db.execute("PRAGMA table_info(job_scores)")
+        scores_columns = {row[1] for row in await scores_cursor.fetchall()}
+        scores_migrations = {
+            "role_match": "ALTER TABLE job_scores ADD COLUMN role_match INTEGER NOT NULL DEFAULT 1",
+        }
+        for col, sql in scores_migrations.items():
+            if col not in scores_columns:
+                await self.db.execute(sql)
+
         # user_profile migrations - add new columns
         profile_cursor = await self.db.execute("PRAGMA table_info(user_profile)")
         profile_columns = {row[1] for row in await profile_cursor.fetchall()}
@@ -907,14 +918,14 @@ class Database:
         )
         await self.db.commit()
 
-    async def insert_score(self, job_id, match_score, match_reasons, concerns, suggested_keywords):
+    async def insert_score(self, job_id, match_score, match_reasons, concerns, suggested_keywords, role_match=True):
         now = datetime.now(timezone.utc).isoformat()
         await self.db.execute(
             """INSERT OR REPLACE INTO job_scores
-               (job_id, match_score, match_reasons, concerns, suggested_keywords, scored_at)
-               VALUES (?, ?, ?, ?, ?, ?)""",
+               (job_id, match_score, match_reasons, concerns, suggested_keywords, scored_at, role_match)
+               VALUES (?, ?, ?, ?, ?, ?, ?)""",
             (job_id, match_score, json.dumps(match_reasons), json.dumps(concerns),
-             json.dumps(suggested_keywords), now)
+             json.dumps(suggested_keywords), now, 1 if role_match else 0)
         )
         await self.db.commit()
 
@@ -932,6 +943,12 @@ class Database:
         await self.db.commit()
         return cursor.rowcount
 
+    async def clear_all_scores(self) -> int:
+        """Remove all score entries so every job can be rescored with a new rubric."""
+        cursor = await self.db.execute("DELETE FROM job_scores")
+        await self.db.commit()
+        return cursor.rowcount
+
     async def get_score(self, job_id):
         cursor = await self.db.execute("SELECT * FROM job_scores WHERE job_id = ?", (job_id,))
         row = await cursor.fetchone()
@@ -941,6 +958,7 @@ class Database:
         d["match_reasons"] = json.loads(d["match_reasons"])
         d["concerns"] = json.loads(d["concerns"])
         d["suggested_keywords"] = json.loads(d["suggested_keywords"])
+        d["role_match"] = bool(d.get("role_match", 1))
         return d
 
     async def get_analytics(self) -> dict:
