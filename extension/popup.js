@@ -46,15 +46,15 @@ fillBtn.addEventListener('click', async () => {
 
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab) {
-      await chrome.tabs.sendMessage(tab.id, { type: 'startFill' });
-    }
+    if (!tab) throw new Error('No active tab');
+    await chrome.tabs.sendMessage(tab.id, { type: 'startFill' });
+    window.close();
   } catch (err) {
     console.error('Fill error:', err);
-  } finally {
     fillBtn.textContent = 'Fill Application';
     fillBtn.disabled = false;
-    window.close();
+    statusText.textContent = 'Refresh the page and try again';
+    statusDot.className = 'status-dot disconnected';
   }
 });
 

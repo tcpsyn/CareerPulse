@@ -304,18 +304,41 @@ describe('fill button', () => {
     expect(document.getElementById('fillBtn').textContent).toBe('Filling...');
   });
 
-  it('restores button text after fill completes', async () => {
+  it('closes popup after successful fill', async () => {
     loadPopup();
     await vi.waitFor(() => {
       expect(document.getElementById('fillBtn').disabled).toBe(false);
     });
 
-    globalThis.chrome.tabs.sendMessage.mockResolvedValue(undefined);
+    globalThis.chrome.tabs.sendMessage.mockResolvedValue({ ok: true });
+    const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {});
     document.getElementById('fillBtn').click();
 
     await vi.waitFor(() => {
-      expect(document.getElementById('fillBtn').textContent).toBe('Fill Application');
+      expect(closeSpy).toHaveBeenCalled();
     });
+    closeSpy.mockRestore();
+  });
+
+  it('shows error and stays open when content script unreachable', async () => {
+    loadPopup();
+    await vi.waitFor(() => {
+      expect(document.getElementById('fillBtn').disabled).toBe(false);
+    });
+
+    globalThis.chrome.tabs.sendMessage.mockRejectedValue(
+      new Error('Could not establish connection. Receiving end does not exist.')
+    );
+    const closeSpy = vi.spyOn(window, 'close').mockImplementation(() => {});
+    document.getElementById('fillBtn').click();
+
+    await vi.waitFor(() => {
+      expect(document.getElementById('statusText').textContent).toBe('Refresh the page and try again');
+    });
+    expect(document.getElementById('fillBtn').textContent).toBe('Fill Application');
+    expect(document.getElementById('fillBtn').disabled).toBe(false);
+    expect(closeSpy).not.toHaveBeenCalled();
+    closeSpy.mockRestore();
   });
 });
 
