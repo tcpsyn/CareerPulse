@@ -392,7 +392,7 @@ async def update_ai_settings(request: Request):
                                 "region": region})
     config = await request.app.state.db.get_search_config()
     resume_text = config.get("resume_text", "") if config else ""
-    request.app.state.reinit_ai_services(client, resume_text)
+    await request.app.state.reinit_ai_services(client, resume_text)
     return {"ok": True, "provider": provider, "model": model}
 
 
@@ -641,7 +641,7 @@ async def upload_resume(request: Request, file: UploadFile = File(...)):
         analysis, profile_data = await asyncio.gather(analysis_task, profile_task)
         logger.info(f"Analysis result: ats_score={analysis.get('ats_score')}, terms={len(analysis.get('search_terms', []))}")
         logger.info(f"Profile parse: {len(profile_data)} sections extracted")
-        request.app.state.reinit_ai_services(client, resume_text)
+        await request.app.state.reinit_ai_services(client, resume_text)
 
     db = request.app.state.db
     await db.save_search_config(
