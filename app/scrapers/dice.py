@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -135,12 +136,26 @@ class DiceScraper(BaseScraper):
             return text if len(text) > 100 else None
         return None
 
+    SCRAPE_TIMEOUT = 300  # 5 minutes
+    MAX_DETAIL_FETCHES = 50
+    MIN_SUMMARY_LENGTH = 200
+    DETAIL_CONCURRENCY = 5
+
     async def scrape(self) -> list[JobListing]:
+        try:
+            return await asyncio.wait_for(self._scrape_inner(), timeout=self.SCRAPE_TIMEOUT)
+        except asyncio.TimeoutError:
+            logger.warning(f"Dice scraper timed out after {self.SCRAPE_TIMEOUT}s, returning {len(self._partial_results)} partial results")
+            return self._partial_results
+
+    async def _scrape_inner(self) -> list[JobListing]:
+        self._partial_results = []
         queries = self.search_terms[:10] if self.search_terms else ["devops remote", "SRE remote", "platform engineer remote"]
-        all_jobs = []
+        pending_jobs = []
         seen_ids = set()
 
         async with self.get_client() as client:
+            # Phase 1: collect job listings from search pages
             for query in queries:
                 for page in range(1, 3):  # 2 pages per query
                     params = self._build_params(query, page)
@@ -189,8 +204,6 @@ class DiceScraper(BaseScraper):
                             tags.extend(job["workplaceTypes"])
 
                         detail_url = job.get("detailsPageUrl", "")
-                        # Programmatic jobs use apply-redirect URLs with no detail page;
-                        # construct the real detail URL from the guid instead
                         if "/apply-redirect" in detail_url:
                             guid = job.get("guid", "")
                             if guid:
@@ -198,29 +211,66 @@ class DiceScraper(BaseScraper):
                             else:
                                 detail_url = ""
 
-                        description = job.get("summary", "")
+                        pending_jobs.append({
+                            "title": title,
+                            "company": job.get("companyName", ""),
+                            "location": location,
+                            "summary": job.get("summary", ""),
+                            "url": detail_url,
+                            "salary_min": salary_min,
+                            "salary_max": salary_max,
+                            "posted_date": job.get("postedDate"),
+                            "tags": tags,
+                        })
+
+            # Phase 2: fetch detail pages concurrently with bounded concurrency
+            detail_sem = asyncio.Semaphore(self.DETAIL_CONCURRENCY)
+            detail_fetch_count = 0
+
+            async def fetch_detail(job_info: dict) -> JobListing | None:
+                nonlocal detail_fetch_count
+                summary = job_info["summary"]
+                detail_url = job_info["url"]
+                description = summary
+
+                needs_detail = (
+                    len(summary) < self.MIN_SUMMARY_LENGTH
+                    and detail_url
+                    and detail_fetch_count < self.MAX_DETAIL_FETCHES
+                )
+
+                if needs_detail:
+                    detail_fetch_count += 1
+                    async with detail_sem:
                         try:
                             full_desc = await self._fetch_full_description(client, detail_url)
                             if full_desc:
                                 description = full_desc
                         except _DiceGone:
-                            logger.debug(f"Dice listing gone (410): {title}")
-                            continue
+                            logger.debug(f"Dice listing gone (410): {job_info['title']}")
+                            return None
 
-                        all_jobs.append(
-                            JobListing(
-                                title=title,
-                                company=job.get("companyName", ""),
-                                location=location,
-                                description=description,
-                                url=detail_url,
-                                source=self.source_name,
-                                salary_min=salary_min,
-                                salary_max=salary_max,
-                                posted_date=job.get("postedDate"),
-                                tags=tags,
-                            )
-                        )
+                listing = JobListing(
+                    title=job_info["title"],
+                    company=job_info["company"],
+                    location=job_info["location"],
+                    description=description,
+                    url=detail_url,
+                    source=self.source_name,
+                    salary_min=job_info["salary_min"],
+                    salary_max=job_info["salary_max"],
+                    posted_date=job_info["posted_date"],
+                    tags=job_info["tags"],
+                )
+                self._partial_results.append(listing)
+                return listing
 
-        logger.info(f"Dice scraper found {len(all_jobs)} unique jobs")
+            results = await asyncio.gather(
+                *(fetch_detail(job) for job in pending_jobs),
+                return_exceptions=True,
+            )
+
+            all_jobs = [r for r in results if isinstance(r, JobListing)]
+
+        logger.info(f"Dice scraper found {len(all_jobs)} unique jobs ({detail_fetch_count} detail fetches)")
         return all_jobs
